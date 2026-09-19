@@ -11,6 +11,7 @@ import json
 import statistics
 from pathlib import Path
 
+from evaluation.scenarios import BY_NAME
 from src import config
 
 RESULTS = config.ROOT / "evaluation" / "results" / "benchmark.json"
@@ -62,6 +63,38 @@ def summarise(rows: list[dict]) -> list[dict]:
     return summary
 
 
+def by_reachability(rows: list[dict]) -> dict[str, dict[str, tuple[int, int]]]:
+    """Split recall by whether a filename rule could reach the faults at all.
+
+    This is the split that matters. Aggregate recall is dominated by changes
+    whose own test file is named after them, where matching on the filename is
+    already perfect and no amount of reading the diff can beat it. The question
+    the project exists to answer is what happens to the faults that live
+    somewhere else.
+    """
+    buckets: dict[str, dict[str, list[int]]] = {"indirect": {}, "filename_reachable": {}}
+    for row in rows:
+        if not row["faults_total"]:
+            continue
+        baseline = next(
+            other for other in rows
+            if other["scenario"] == row["scenario"]
+            and other["strategy"] == "file_rule"
+            and other["repeat"] == row["repeat"]
+        )
+        stem = Path(BY_NAME[row["scenario"]].path).stem
+        has_indirect = any(f"test_{stem}.py" not in nodeid for nodeid in baseline["missed"])
+        tally = buckets["indirect" if has_indirect else "filename_reachable"].setdefault(
+            row["strategy"], [0, 0]
+        )
+        tally[0] += row["faults_found"]
+        tally[1] += row["faults_total"]
+    return {
+        name: {strategy: tuple(counts) for strategy, counts in group.items()}
+        for name, group in buckets.items()
+    }
+
+
 def render(payload: dict, markdown: bool = False) -> str:
     rows = payload["measurements"]
     summary = summarise(rows)
@@ -93,6 +126,28 @@ def render(payload: dict, markdown: bool = False) -> str:
         ]
         out.append("| " + " | ".join(cells) + " |" if markdown
                    else f"  {cells[0]:<12} {cells[1]:>9}  {recall:>5}  full {cells[3]:>7}  blind {cells[4]:>7}  run {cells[5]:>5}  ttff {ttff:>10}")
+    out.append("")
+
+    split = by_reachability(rows)
+    labels = {
+        "indirect": "Faults a filename rule cannot reach",
+        "filename_reachable": "Faults in the test file named after the change",
+    }
+    out.append("## Recall, split by what a filename rule can reach" if markdown
+               else "RECALL BY REACHABILITY")
+    out.append("")
+    if markdown:
+        out.append("| Faults | " + " | ".join(f"`{s}`" for s in order) + " |")
+        out.append("|---|" + "---|" * len(order))
+    for key, group in split.items():
+        cells = []
+        for strategy in order:
+            found, total = group.get(strategy, (0, 0))
+            cells.append(f"{found}/{total} ({found / total:.0%})" if total else "n/a")
+        if markdown:
+            out.append(f"| {labels[key]} | " + " | ".join(cells) + " |")
+        else:
+            out.append(f"  {labels[key]:<48} " + "  ".join(f"{c:>14}" for c in cells))
     out.append("")
 
     model = [item for item in summary if item["attempts"]]
