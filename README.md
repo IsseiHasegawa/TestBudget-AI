@@ -114,39 +114,58 @@ keep CI useful when no model is available rather than to lose a fair fight.
 
 ## Measured: changing the rounding in coupon.py
 
-Switching `_round_percent` from truncation to round-half-up, run with a one
-second budget against a 4.6 second suite.
+Switching `_round_percent` from truncation to round-half-up breaks two tests:
+`test_percent_discount_truncates_partial_cent` directly, and
+`test_percent_coupon_changes_total` indirectly, through checkout's use of the
+discount. Run with a 60s budget against a 139s suite, so roughly half the suite
+has to be left out.
 
-| Strategy | Selected | Failures found | Indirect checkout failure |
-|---|---|---|---|
-| `file_rule` | 23 / 30 | 1 | **missed** |
-| `keyword` | 22 / 30 | 2 | found |
+| Strategy | Tests run | Direct failure | Indirect failure | Failures found |
+|---|---|---|---|---|
+| `file_rule` | 19 / 30 | rank 7 | **missed** | 1 of 2 |
+| `duration` | 19 / 30 | **missed** | **missed** | 0 of 2 |
+| `history` | 19 / 30 | **missed** | **missed** | 0 of 2 |
+| `keyword` | 13 / 30 | rank 3 | rank 8 | 2 of 2 |
+| `nemotron` | 14 / 30 | rank 6 | **rank 1** | 2 of 2 |
 
-Same budget, one fewer test selected, twice as many failures found.
-`file_rule` cannot reach that failure at all: `test_checkout.py` does not carry
-the name `coupon.py`.
+The two strategies that find both failures are also the two that run the fewest
+tests. Spending a budget well is not the same as spending less of it.
 
-### Ranking comparison
+`duration` and `history` find nothing, which is the expected result and the
+reason they are in the table. Neither looks at the diff, so neither has any
+way to prefer a test the change can reach.
 
-Where each strategy places the two failing tests. Lower is better, because it
-means reaching the failure sooner.
+`file_rule` finds the direct failure and cannot reach the indirect one:
+`test_checkout.py` does not carry the name `coupon.py`, so no filename rule
+will ever select it.
 
-| Strategy | Direct failure (coupon) | Indirect failure (checkout) | Tests to reach both |
-|---|---|---|---|
-| `file_rule` | 7 | 27 | 27 |
-| `duration` | 26 | 27 | 27 |
-| `history` | 26 | 27 | 27 |
-| `keyword` | 3 | 8 | 8 |
-| `nemotron` | 4 | **2** | **4** |
+Nemotron ranks the indirect failure first, ahead of the direct one. The reason
+it gave was "Order total directly computes from coupon discount which changed
+rounding method". That is the dependency stated in words, from a model that was
+shown the diff and a list of test names and nothing else.
 
-Nemotron is the only strategy that puts the indirect failure near the top. The
-reason it returned was "Order total directly computes from coupon discount
-which changed rounding method", which states the coupon to checkout dependency
-in words.
+### Reliability, which is the less flattering half
 
-That row is one successful call. Two of three attempts at the same budget hit
-the nine second allowance and degraded to the keyword ordering. The report
-records that rate rather than hiding it.
+At a 60s budget the model gets a 9s allowance. Across five attempts at the same
+change:
+
+| Outcome | Count | Cost |
+|---|---|---|
+| Ranked successfully | 1 | 1.33s |
+| Timed out, fell back to `keyword` | 4 | about 9.2s each |
+
+One call in five landed. An earlier sample of twelve calls had nine finish
+inside ten seconds, so the rate moves with load on the free tier rather than
+being fixed, but either way the model is not something to depend on.
+
+This is what the fallback is for, and the numbers say it works: after burning
+9s on a call that never returned, `keyword` still ran 13 tests inside the
+remaining 51s and still found both failures. The failed attempt cost budget and
+changed nothing else.
+
+The honest summary is that the ranking method matters enormously, that Nemotron
+produces the best ranking when it answers, and that a deterministic fallback is
+what makes it safe to ask at all.
 
 ## Continuous integration
 
