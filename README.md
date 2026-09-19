@@ -1,159 +1,213 @@
 # TestBudget AI
 
-Pull Request の変更差分を NVIDIA Nemotron が意味的に解析し、限られた実行時間予算の
-なかで関連するテストを優先実行する CI 支援システム。
+A CI assistant that has NVIDIA Nemotron read a pull request diff, work out which
+tests the change is likely to break, and run those first inside a fixed time
+budget.
 
-> 選択的テストが PASS しても「全テスト PASS」を意味しない。フルスイートは別経路で実行する。
+> A green selective run does not mean a green suite. The full suite still runs
+> on its own path.
 
-## 現在の状態
+## Status
 
-| Phase | 内容 | 状態 |
+Phases 2 and 3 were swapped during development. The scheduler and the non-AI
+ranking came first so that a working selective CI existed before any model was
+involved, which also produced the baselines the evaluation compares against.
+
+| Phase | Scope | State |
 |---|---|---|
-| P1 | サンプルアプリ / 30 pytest / nodeid 収集 / 実行時間履歴 / 選択実行 / JSON レポート | 完了 |
-| P3 | Git diff 解析、非AI順位付け、Budget Scheduler、timeout、Reporter 拡張 | 完了 |
-| P2 | Nemotron API クライアント、構造化出力、検証パイプライン | 完了 |
-| P4 | GitHub Actions、Secrets と権限 | 未着手 |
-| P5 | 非 AI baseline、10 件以上の変更シナリオ、評価集計 | 未着手 |
-| P6 | デモ PR、結果画面、発表準備 | 未着手 |
+| P1 | Sample app, 30 pytest tests, nodeid collection, duration history, selective execution, JSON report | Done |
+| P3 | Git diff analysis, non-AI ranking, budget scheduler, timeouts, extended reporting | Done |
+| P2 | Nemotron client, structured output, validation pipeline | Done |
+| P4 | GitHub Actions, secrets and permissions | Not started |
+| P5 | Non-AI baselines, ten or more change scenarios, evaluation | Not started |
+| P6 | Demo PR, results view, presentation | Not started |
 
-## セットアップ
+## Setup
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
-## 使い方
+The only dependency is pytest. The Nemotron client uses the standard library,
+so nothing extra is needed to run it.
+
+## Usage
 
 ```bash
-# 収集: 実在する nodeid、要約、計測済み実行時間を一覧する
+# Collect: every real nodeid, its summary and its measured duration
 ./.venv/bin/python main.py collect
 
-# 変更差分の解析: 変更ファイルと、変更された関数・クラス名
-./.venv/bin/python main.py changes                    # 未コミットの変更
-./.venv/bin/python main.py changes --base origin/main # PR 相当
+# Analyse a change: which files moved, and which functions and classes inside them
+./.venv/bin/python main.py changes                    # uncommitted changes
+./.venv/bin/python main.py changes --base origin/main # what a PR would see
 
-# 実行計画: 予算内に収まる範囲を決めるが、実行はしない
+# Plan: decide what fits the budget without running anything
 ./.venv/bin/python main.py select --budget 3
 
-# 予算付き実行: 差分を解析し、順位を付け、予算内で選び、実行する
+# Run: analyse, rank, pick what fits, execute
 ./.venv/bin/python main.py run --budget 3
 
-# baseline との比較
+# Compare against a baseline
 ./.venv/bin/python main.py run --budget 3 --strategy file_rule
 
-# Nemotron による順位付け (.env に NVIDIA_API_KEY が必要)
+# Rank with Nemotron (needs NVIDIA_API_KEY in .env)
 ./.venv/bin/python main.py select --budget 60 --strategy nemotron
 
-# 選択実行: 指定した nodeid だけを実行し、結果を JSON に保存する
+# Run an explicit set of nodeids and save the result as JSON
 ./.venv/bin/python main.py run \
   --nodeid 'demo_project/tests/test_coupon.py::test_percent_discount_truncates_partial_cent' \
   --nodeid 'demo_project/tests/test_checkout.py::test_percent_coupon_changes_total'
 
-# フルスイート実行 (実行時間履歴の更新にも使う)
+# Full suite, which is also how the duration history gets updated
 ./.venv/bin/python main.py run --all
 
-# 計測済みの実行時間を遅い順に表示する
+# Measured durations, slowest first
 ./.venv/bin/python main.py history
 ```
 
-`run` は常に `artifacts/run-<timestamp>.json` にレポートを書き出す。`--json PATH` で
-出力先を指定できる。レポートには選択したテストだけでなく、**実行しなかったテスト**の
-一覧も必ず含まれる。
+`run` always writes a report to `artifacts/run-<timestamp>.json`, or to
+`--json PATH`. The report names the tests that were **not** executed, and why,
+alongside the ones that were.
 
-## ディレクトリ構成
+## Layout
 
 ```
 src/
-  config.py             共通パスと既定値、pytest サブプロセスの環境
+  config.py             shared paths, defaults, pytest subprocess environment
   models.py             TestCandidate / TestResult / RunOutcome
-  pytest_tb_plugin.py   収集結果と実行結果を書き出す pytest プラグイン
-  test_collector.py     nodeid の収集と検証
-  change_analyzer.py    git diff から変更ファイルと関数・クラス名を抽出
-  nemotron_client.py    モデルへの問い合わせ。予算連動タイムアウトとエラー分類
-  model_response.py     モデル応答の検証。ネットワーク非依存
-  prioritizer.py        非AI順位付け (baseline 3種 + fallback)
-  scheduler.py          予算内選択。決定的
-  test_runner.py        指定 nodeid のみの実行、締切と個別 timeout
-  history.py            実行時間と失敗回数の履歴
-  reporter.py           JSON レポートとコンソール出力
+  pytest_tb_plugin.py   pytest plugin that exports collection and result data
+  test_collector.py     nodeid collection and validation
+  change_analyzer.py    changed files and enclosing symbols, from git diff
+  nemotron_client.py    the model call: budget-linked timeout, error classification
+  model_response.py     response validation, with no network dependency
+  prioritizer.py        non-AI ranking (three baselines plus a fallback)
+  scheduler.py          budget-constrained selection, deterministic
+  test_runner.py        runs given nodeids under a deadline and per-test timeout
+  history.py            measured durations and failure counts
+  reporter.py           JSON report and console output
 demo_project/
-  app/                  EC ロジック (cart / coupon / checkout / payment / profile)
-  tests/                pytest 30 件
-tests_internal/         ツール自身のテスト
-data/duration_history.json  計測済み実行時間
+  app/                  store logic (cart / coupon / checkout / payment / profile)
+  tests/                30 pytest tests
+tests_internal/         tests for the tooling itself
+data/duration_history.json  measured durations
 main.py                 CLI
 ```
 
-## 順位付けの方式
+## Ranking strategies
 
-| 方式 | 役割 | 内容 |
+| Strategy | Role | What it does |
 |---|---|---|
-| `file_rule` | 評価用 baseline | 変更ファイル名に対応するテストファイルのみ |
-| `duration` | 評価用 baseline | 変更を見ず、短いテストから |
-| `history` | 評価用 baseline | 直近で失敗したテストから |
-| `keyword` | 実運用の fallback | 上記に加え、変更された関数名がテスト名や docstring に現れるか |
-| `nemotron` | 本命 | 差分と候補テストを Nemotron に渡し、意味的な順位を得る。失敗時は `keyword` へ縮退 |
+| `file_rule` | Evaluation baseline | Only test files whose name matches a changed source file |
+| `duration` | Evaluation baseline | Ignores the change, runs the quickest tests first |
+| `history` | Evaluation baseline | Recently failed tests first |
+| `keyword` | Production fallback | The above, plus changed symbol names appearing in a test name or docstring |
+| `nemotron` | The real thing | Sends the diff and the candidates to Nemotron for a semantic order, and degrades to `keyword` on any failure |
 
-baseline を賢くすると比較実験が無意味になるため、`file_rule` は意図的に単純なままにしてあります。`keyword` は「モデルが使えないときに CI を役立たせる」ための最善手なので、制限していません。
+`file_rule` is kept deliberately simple. Dressing up a baseline until it
+quietly encodes the same insight as the model would make the comparison
+meaningless. `keyword` is not held back the same way, because its job is to
+keep CI useful when no model is available rather than to lose a fair fight.
 
-## 実測: coupon.py の丸め処理を変更した場合
+## Measured: changing the rounding in coupon.py
 
-`_round_percent` の丸めを切り捨てから四捨五入に変えた差分に対し、予算1秒 (フルスイートは4.6秒) で実行した結果です。
+Switching `_round_percent` from truncation to round-half-up, run with a one
+second budget against a 4.6 second suite.
 
-| 方式 | 選択数 | 検出した失敗 | checkout の間接的失敗 |
+| Strategy | Selected | Failures found | Indirect checkout failure |
 |---|---|---|---|
-| `file_rule` | 23 / 30 | 1 | **見逃し** |
-| `keyword` | 22 / 30 | 2 | 検出 |
+| `file_rule` | 23 / 30 | 1 | **missed** |
+| `keyword` | 22 / 30 | 2 | found |
 
-同じ予算で、選択数はむしろ少ないのに検出した失敗は2倍です。`file_rule` は `test_checkout.py` の名前が `coupon.py` と対応しないため、構造的にこの失敗に到達できません。
+Same budget, one fewer test selected, twice as many failures found.
+`file_rule` cannot reach that failure at all: `test_checkout.py` does not carry
+the name `coupon.py`.
 
-### 順位の比較
+### Ranking comparison
 
-同じ差分に対し、2つの失敗テストが何番目に置かれるか。数字が小さいほど早く失敗に到達します。
+Where each strategy places the two failing tests. Lower is better, because it
+means reaching the failure sooner.
 
-| 方式 | 直接の失敗 (coupon) | 間接の失敗 (checkout) | 両方に到達するまで |
+| Strategy | Direct failure (coupon) | Indirect failure (checkout) | Tests to reach both |
 |---|---|---|---|
-| `file_rule` | 7 | 27 | 27 件 |
-| `duration` | 26 | 27 | 27 件 |
-| `history` | 26 | 27 | 27 件 |
-| `keyword` | 3 | 8 | 8 件 |
-| `nemotron` | 4 | **2** | **4 件** |
+| `file_rule` | 7 | 27 | 27 |
+| `duration` | 26 | 27 | 27 |
+| `history` | 26 | 27 | 27 |
+| `keyword` | 3 | 8 | 8 |
+| `nemotron` | 4 | **2** | **4** |
 
-Nemotron だけが間接的な失敗を上位に置きました。返ってきた理由は「Order total directly computes from coupon discount which changed rounding method」で、coupon から checkout への依存を言語化しています。
+Nemotron is the only strategy that puts the indirect failure near the top. The
+reason it returned was "Order total directly computes from coupon discount
+which changed rounding method", which states the coupon to checkout dependency
+in words.
 
-`nemotron` の行は成功した1回の試行です。同条件の3回中2回は9秒のタイムアウトで `keyword` へ縮退しました。この縮退率は隠さずレポートに記録されます。
+That row is one successful call. Two of three attempts at the same budget hit
+the nine second allowance and degraded to the keyword ordering. The report
+records that rate rather than hiding it.
 
-## 設計上の決定
+## Design decisions
 
-**nodeid は pytest 自身から受け取る。** junit-xml のクラス名から nodeid を組み立てると
-パラメータ化テストやクラス内テストで壊れる。`src/pytest_tb_plugin.py` は
-`report.nodeid` をそのまま書き出すので、スケジューラが pytest に渡す ID は必ず
-収集済みの ID と完全一致する。
+**Nodeids come from pytest itself.** Rebuilding them from junit-xml class names
+breaks on parametrised tests and tests inside classes.
+`src/pytest_tb_plugin.py` writes `report.nodeid` verbatim, so every id the
+scheduler hands back to pytest is guaranteed to match a collected one.
 
-**モデル出力はシェルに渡らない。** nodeid は argv の個別要素として渡し、文字列連結は
-しない。収集済み候補に存在しない ID は `validate_nodeids` が実行前に捨てる。
+**Model output never reaches a shell.** Nodeids travel as separate argv
+entries, never concatenated into a string. Ids that were not collected are
+dropped by `validate_nodeids` before execution.
 
-**実行時間は中央値で推定する。** 1 回だけ遅かった実行に引きずられないようにするため。
-推定値は予測であって保証ではないので、スケジューラ (P3) は余裕時間を持たせる。
+**The model returns indices, not test ids.** Asking for positions in the
+candidate list cuts the response from roughly a thousand tokens to two hundred,
+which is the only lever that reliably moves latency. It also makes an invented
+test id structurally impossible: an index is either in range or it is not.
 
-**デモテストの一部は意図的に待ち時間を入れている。** `demo_project/tests/support.py` の
-`simulate_io()` は決済ゲートウェイや画像アップロードの I/O 待ちを模したもので、実測
-した処理時間ではない。デモアプリは純粋な算術演算のみでマイクロ秒で終わるため、この
-待ち時間がないと時間予算スケジューリングが成立しない。
+**Thinking mode is off.** Measured at 33s against 1.4s without it, on rankings
+that did not differ.
 
-**予算は2段階で守る。** プラグインが実時間の締切を持ち、締切を過ぎたテストは開始しません。さらに締切は個々のテストの上限にもなります。開始を止めるだけでは、すでに走っているテストが予算を踏み越えるためです。サブプロセス全体の timeout はその数秒後に置かれた最後の砦で、通常は発動しません。
+**Every rejection case in the validator was observed, not imagined.** Setting
+`response_format` to `json_object` still produced malformed JSON from a
+generation loop that ran into the token ceiling, and still returned
+`ranked_tests` as bare strings instead of objects. The shape is checked rather
+than assumed, and an unrecognised shape is rejected rather than repaired.
 
-**実行結果は1件ずつ追記する。** 予算駆動の実行は途中で止まるのが常態です。セッション終了時にまとめて書くと、完了していたテストの結果まで失われます。
+**Auth failures and rate limits are never retried.** Retrying them only burns
+budget. They are reported by name, so a run that quietly lost its model cannot
+pass for an assisted one.
 
-**キーワード照合の誤検出は残してある。** 変更された `_round_percent` の "round" が、profile テストの docstring "round trip" と一致し、無関係なアバターアップロードテストを押し上げます。これはトークン照合の実際の限界なので、調整して消さず `tests_internal/test_ranking.py` に固定してあります。モデルがこの誤りを避けられるかどうかが、比較実験の中身です。
+**Durations are estimated with a median.** One slow run should not drag the
+estimate. An estimate is a prediction rather than a guarantee, so the scheduler
+keeps headroom on top of it.
 
-**checkout は coupon に間接的に依存する。** `coupon.py` の丸め方を変えると
-`test_checkout.py` の合計金額アサーションが落ちる。ファイル名対応だけのテスト選択が
-取りこぼすのはこの種の変更であり、評価実験の中心になるケース。
+**The budget is enforced at two levels.** The plugin holds a wall-clock
+deadline and refuses to start a test past it, and that deadline also bounds
+each individual test. Refusing to start a test does nothing about one already
+running. The subprocess timeout sits a few seconds later as a backstop and
+normally never fires.
 
-## 検証
+**Results are appended one at a time.** A budget-driven run gets stopped
+mid-flight as a matter of course. Buffering until session end threw away the
+results of tests that had already finished.
+
+**A known false positive in the keyword matcher is left in place.** The word
+"round" in the changed `_round_percent` matches "round trip" in a profile test
+docstring, which lifts an unrelated avatar upload test. That is a real limit of
+token overlap, so it is pinned in `tests_internal/test_ranking.py` rather than
+tuned away. Whether the model avoids that mistake is the substance of the
+comparison.
+
+**Some demo tests sleep on purpose.** `simulate_io()` in
+`demo_project/tests/support.py` stands in for a payment gateway or an image
+upload. It is simulated latency, not measured work. The demo app is pure
+arithmetic and would finish in microseconds, which leaves a time budget nothing
+to schedule around.
+
+**checkout depends on coupon indirectly.** Changing the rounding in
+`coupon.py` breaks the total assertions in `test_checkout.py`. A test filter
+based on file names misses exactly this kind of change, and it is the case the
+evaluation is built around.
+
+## Verifying
 
 ```bash
-./.venv/bin/python -m pytest -q     # デモ 30 件 + ツール 10 件
+./.venv/bin/python -m pytest -q     # 30 demo tests + 39 tooling tests
 ```

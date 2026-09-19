@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
 
-# demo_project のテストは `from app.cart import Cart` の形で書くため、
-# リポジトリルートと demo_project の両方を import path に載せる。
+# Tests under demo_project import as `from app.cart import Cart`, so both the
+# repository root and demo_project have to be on the import path.
 ROOT = Path(__file__).resolve().parent
 for path in (ROOT, ROOT / "demo_project"):
     entry = str(path)
