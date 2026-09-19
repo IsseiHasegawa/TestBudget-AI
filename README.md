@@ -11,7 +11,7 @@ Pull Request の変更差分を NVIDIA Nemotron が意味的に解析し、限�
 |---|---|---|
 | P1 | サンプルアプリ / 30 pytest / nodeid 収集 / 実行時間履歴 / 選択実行 / JSON レポート | 完了 |
 | P3 | Git diff 解析、非AI順位付け、Budget Scheduler、timeout、Reporter 拡張 | 完了 |
-| P2 | Nemotron API クライアント、構造化出力、検証パイプライン | 未着手 |
+| P2 | Nemotron API クライアント、構造化出力、検証パイプライン | 完了 |
 | P4 | GitHub Actions、Secrets と権限 | 未着手 |
 | P5 | 非 AI baseline、10 件以上の変更シナリオ、評価集計 | 未着手 |
 | P6 | デモ PR、結果画面、発表準備 | 未着手 |
@@ -42,6 +42,9 @@ python3 -m venv .venv
 # baseline との比較
 ./.venv/bin/python main.py run --budget 3 --strategy file_rule
 
+# Nemotron による順位付け (.env に NVIDIA_API_KEY が必要)
+./.venv/bin/python main.py select --budget 60 --strategy nemotron
+
 # 選択実行: 指定した nodeid だけを実行し、結果を JSON に保存する
 ./.venv/bin/python main.py run \
   --nodeid 'demo_project/tests/test_coupon.py::test_percent_discount_truncates_partial_cent' \
@@ -67,6 +70,8 @@ src/
   pytest_tb_plugin.py   収集結果と実行結果を書き出す pytest プラグイン
   test_collector.py     nodeid の収集と検証
   change_analyzer.py    git diff から変更ファイルと関数・クラス名を抽出
+  nemotron_client.py    モデルへの問い合わせ。予算連動タイムアウトとエラー分類
+  model_response.py     モデル応答の検証。ネットワーク非依存
   prioritizer.py        非AI順位付け (baseline 3種 + fallback)
   scheduler.py          予算内選択。決定的
   test_runner.py        指定 nodeid のみの実行、締切と個別 timeout
@@ -88,6 +93,7 @@ main.py                 CLI
 | `duration` | 評価用 baseline | 変更を見ず、短いテストから |
 | `history` | 評価用 baseline | 直近で失敗したテストから |
 | `keyword` | 実運用の fallback | 上記に加え、変更された関数名がテスト名や docstring に現れるか |
+| `nemotron` | 本命 | 差分と候補テストを Nemotron に渡し、意味的な順位を得る。失敗時は `keyword` へ縮退 |
 
 baseline を賢くすると比較実験が無意味になるため、`file_rule` は意図的に単純なままにしてあります。`keyword` は「モデルが使えないときに CI を役立たせる」ための最善手なので、制限していません。
 
@@ -101,6 +107,22 @@ baseline を賢くすると比較実験が無意味になるため、`file_rule`
 | `keyword` | 22 / 30 | 2 | 検出 |
 
 同じ予算で、選択数はむしろ少ないのに検出した失敗は2倍です。`file_rule` は `test_checkout.py` の名前が `coupon.py` と対応しないため、構造的にこの失敗に到達できません。
+
+### 順位の比較
+
+同じ差分に対し、2つの失敗テストが何番目に置かれるか。数字が小さいほど早く失敗に到達します。
+
+| 方式 | 直接の失敗 (coupon) | 間接の失敗 (checkout) | 両方に到達するまで |
+|---|---|---|---|
+| `file_rule` | 7 | 27 | 27 件 |
+| `duration` | 26 | 27 | 27 件 |
+| `history` | 26 | 27 | 27 件 |
+| `keyword` | 3 | 8 | 8 件 |
+| `nemotron` | 4 | **2** | **4 件** |
+
+Nemotron だけが間接的な失敗を上位に置きました。返ってきた理由は「Order total directly computes from coupon discount which changed rounding method」で、coupon から checkout への依存を言語化しています。
+
+`nemotron` の行は成功した1回の試行です。同条件の3回中2回は9秒のタイムアウトで `keyword` へ縮退しました。この縮退率は隠さずレポートに記録されます。
 
 ## 設計上の決定
 
