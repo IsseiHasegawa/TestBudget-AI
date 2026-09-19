@@ -19,7 +19,7 @@ involved, which also produced the baselines the evaluation compares against.
 | P3 | Git diff analysis, non-AI ranking, budget scheduler, timeouts, extended reporting | Done |
 | P2 | Nemotron client, structured output, validation pipeline | Done |
 | P4 | GitHub Actions, secrets and permissions | Done |
-| P5 | Non-AI baselines, ten or more change scenarios, evaluation | Not started |
+| P5 | Non-AI baselines, fourteen change scenarios, evaluation | Done |
 | P6 | Demo PR, results view, presentation | Not started |
 
 ## Setup
@@ -166,6 +166,80 @@ changed nothing else.
 The honest summary is that the ranking method matters enormously, that Nemotron
 produces the best ranking when it answers, and that a deterministic fallback is
 what makes it safe to ask at all.
+
+## Evaluation
+
+Fourteen scenarios, each one string replacement in the demo app. What each one
+breaks is measured by running the whole suite, not declared, so the ground
+truth cannot be wrong in the direction that flatters the results. Twelve break
+something, two break nothing. Four passes over every scenario and strategy,
+280 measurements, 60s budget against a 139s suite.
+
+```bash
+./.venv/bin/python -m evaluation.benchmark --budget 60 --repeat 4
+./.venv/bin/python -m evaluation.report --markdown evaluation/results/benchmark.md
+```
+
+Selection is deterministic given a ranking, a set of measured durations and a
+budget, so plans are computed rather than executed. Recall and missed faults
+are exact. Time to first failure is estimated from measured durations, and the
+output says so.
+
+### Aggregate
+
+| Strategy | Faults found | Recall | Caught completely | Blind | Mean tests run |
+|---|---|---|---|---|---|
+| `keyword` | 84 / 104 | **81%** | 44 / 48 | 0 / 48 | 15.3 |
+| `file_rule` | 80 / 104 | 77% | 40 / 48 | 0 / 48 | 16.4 |
+| `nemotron` | 68 / 104 | 65% | 29 / 48 | 8 / 48 | 12.8 |
+| `duration` | 36 / 104 | 35% | 24 / 48 | 12 / 48 | 19.0 |
+| `history` | 36 / 104 | 35% | 24 / 48 | 12 / 48 | 19.0 |
+
+Read on its own that says the model loses to a rule about filenames, and that
+reading is misleading.
+
+### The split that matters
+
+Most scenarios change a module whose own test file is named after it. There,
+matching on the filename is already perfect, and reading the diff cannot beat
+perfect. Those cases dominate the average. Splitting the faults by whether a
+filename rule could reach them at all gives two halves that point in opposite
+directions.
+
+| Faults | `keyword` | `file_rule` | `nemotron` | `duration` | `history` |
+|---|---|---|---|---|---|
+| A filename rule cannot reach | 44% | 33% | **64%** | 11% | 11% |
+| In the test file named after the change | **100%** | **100%** | 66% | 47% | 47% |
+
+Nemotron nearly doubles the filename rule on the faults that rule is blind to,
+and loses on the faults it already catches every time. On `card_flat_fee`,
+where changing a payment constant moves every order total, the model reaches
+five of seven faults against two for both baselines.
+
+The design that follows is not a model instead of a filename rule. It is a
+filename rule, which is free and exact on direct changes, plus a model for the
+reach the rule does not have.
+
+### Reliability
+
+50 of 105 calls answered inside the 9s allowance, so a little under half. Per
+pass, recall stayed between 62 and 69 percent and the answer rate between 46
+and 52 percent, which is stable enough that the split above is not one lucky
+draw.
+
+The model samples at temperature 1, the setting NVIDIA documents for this
+model, so it returns a different order each time. Single-fault scenarios swing
+between 0 and 100 percent across passes: when the call lands and the ranking is
+wrong, it puts the one test that matters outside the budget. A single
+benchmark pass measures one draw rather than the strategy, which is why the
+runner repeats.
+
+### What would improve it
+
+The obvious next step is a hybrid: pin the filename matches to the front of
+the order and let the model rank everything after them. The two halves of the
+table above are close to complementary, and neither baseline costs anything to
+compute.
 
 ## Continuous integration
 
