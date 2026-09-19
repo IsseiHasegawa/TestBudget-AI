@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-19T20:45:24+00:00",
+  "tests": {
+    "demo_project/tests/test_cart.py::test_add_item_appends_new_product": {
+      "durations": [
+        0.0002,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_cart.py::test_add_item_merges_matching_sku": {
+      "durations": [
+        0.0001,
+        0.0001,
+        0.0001
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_cart.py::test_add_item_rejects_non_positive_quantity": {
+      "durations": [
+        0.0001,
+        0.0001,
+        0.0001
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_cart.py::test_remove_unknown_sku_raises": {
+      "durations": [
+        0.0001,
+        0.0001,
+        0.0001
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_cart.py::test_set_quantity_to_zero_removes_line": {
+      "durations": [
+        0.0001,
+        0.0001,
+        0.0001
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_cart.py::test_subtotal_reflects_quantity_changes": {
+      "durations": [
+        0.1565,
+        0.1605,
+        0.1603
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_empty_cart_cannot_check_out": {
+      "durations": [
+        0.0003,
+        0.0003,
+        0.0003
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_fixed_coupon_can_push_order_back_under_threshold": {
+      "durations": [
+        0.1613,
+        0.1532,
+        0.1608
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_free_shipping_threshold_removes_shipping": {
+      "durations": [
+        0.2107,
+        0.2052,
+        0.2107
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_order_breakdown_without_coupon": {
+      "durations": [
+        0.2033,
+        0.2038,
+        0.2108,
+        0.211
+      ],
+      "run_count": 4,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_payment_method_changes_fee_only": {
+      "durations": [
+        0.0005,
+        0.0005,
+        0.0004
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_percent_coupon_changes_total": {
+      "durations": [
+        0.3065,
+        0.3114,
+        0.3057,
+        0.3077
+      ],
+      "run_count": 4,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_checkout.py::test_quote_totals_compares_coupons": {
+      "durations": [
+        0.3559,
+        0.3512,
+        0.355
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_apply_coupon_without_coupon_is_identity": {
+      "durations": [
+        0.0001,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_fixed_discount_is_capped_at_subtotal": {
+      "durations": [
+        0.0002,
+        0.0004,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_free_shipping_coupon_has_no_cash_discount": {
+      "durations": [
+        0.0002,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_max_discount_caps_percent_coupon": {
+      "durations": [
+        0.0002,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_min_subtotal_is_enforced": {
+      "durations": [
+        0.0002,
+        0.0003,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_percent_discount_on_round_subtotal": {
+      "durations": [
+        0.0006,
+        0.0006,
+        0.0006
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_coupon.py::test_percent_discount_truncates_partial_cent": {
+      "durations": [
+        0.256,
+        0.2544,
+        0.2576,
+        0.2581
+      ],
+      "run_count": 4,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_payment.py::test_authorize_contacts_gateway": {
+      "durations": [
+        1.2112,
+        1.202,
+        1.2085
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_payment.py::test_bank_transfer_fee_is_flat_only": {
+      "durations": [
+        0.0001,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_payment.py::test_card_fee_is_percentage_plus_flat": {
+      "durations": [
+        0.0002,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_payment.py::test_expired_card_is_rejected": {
+      "durations": [
+        0.1107,
+        0.1105,
+        0.1108
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_payment.py::test_unknown_method_is_rejected": {
+      "durations": [
+        0.0001,
+        0.0002,
+        0.0002
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_profile.py::test_avatar_upload_accepts_png": {
+      "durations": [
+        1.511,
+        1.511,
+        1.5098
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_profile.py::test_blank_display_name_is_rejected": {
+      "durations": [
+        0.0003,
+        0.0004,
+        0.0003
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_profile.py::test_display_name_whitespace_is_collapsed": {
+      "durations": [
+        0.0006,
+        0.0005,
+        0.0003
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_profile.py::test_email_is_normalized_and_validated": {
+      "durations": [
+        0.0003,
+        0.0003,
+        0.0003
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    },
+    "demo_project/tests/test_profile.py::test_us_address_requires_postal_code": {
+      "durations": [
+        0.1222,
+        0.1221,
+        0.1217
+      ],
+      "run_count": 3,
+      "fail_count": 0,
+      "last_outcome": "passed",
+      "last_run_at": "2026-09-19T20:45:24+00:00"
+    }
+  }
+}

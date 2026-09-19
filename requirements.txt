@@ -1,0 +1,2 @@
+# Phase 1 only needs pytest. The Nemotron client (Phase 2) adds httpx + python-dotenv.
+pytest>=8.0
