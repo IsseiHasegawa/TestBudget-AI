@@ -10,8 +10,8 @@ Pull Request の変更差分を NVIDIA Nemotron が意味的に解析し、限�
 | Phase | 内容 | 状態 |
 |---|---|---|
 | P1 | サンプルアプリ / 30 pytest / nodeid 収集 / 実行時間履歴 / 選択実行 / JSON レポート | 完了 |
-| P2 | Git diff 取得、Nemotron API クライアント、構造化出力、ID 検証、fallback | 未着手 |
-| P3 | Budget Scheduler、timeout、Runner と Reporter の拡張 | 未着手 |
+| P3 | Git diff 解析、非AI順位付け、Budget Scheduler、timeout、Reporter 拡張 | 完了 |
+| P2 | Nemotron API クライアント、構造化出力、検証パイプライン | 未着手 |
 | P4 | GitHub Actions、Secrets と権限 | 未着手 |
 | P5 | 非 AI baseline、10 件以上の変更シナリオ、評価集計 | 未着手 |
 | P6 | デモ PR、結果画面、発表準備 | 未着手 |
@@ -28,6 +28,19 @@ python3 -m venv .venv
 ```bash
 # 収集: 実在する nodeid、要約、計測済み実行時間を一覧する
 ./.venv/bin/python main.py collect
+
+# 変更差分の解析: 変更ファイルと、変更された関数・クラス名
+./.venv/bin/python main.py changes                    # 未コミットの変更
+./.venv/bin/python main.py changes --base origin/main # PR 相当
+
+# 実行計画: 予算内に収まる範囲を決めるが、実行はしない
+./.venv/bin/python main.py select --budget 3
+
+# 予算付き実行: 差分を解析し、順位を付け、予算内で選び、実行する
+./.venv/bin/python main.py run --budget 3
+
+# baseline との比較
+./.venv/bin/python main.py run --budget 3 --strategy file_rule
 
 # 選択実行: 指定した nodeid だけを実行し、結果を JSON に保存する
 ./.venv/bin/python main.py run \
@@ -51,9 +64,12 @@ python3 -m venv .venv
 src/
   config.py             共通パスと既定値、pytest サブプロセスの環境
   models.py             TestCandidate / TestResult / RunOutcome
-  pytest_tb_plugin.py   収集結果と実行結果を JSON に書き出す pytest プラグイン
+  pytest_tb_plugin.py   収集結果と実行結果を書き出す pytest プラグイン
   test_collector.py     nodeid の収集と検証
-  test_runner.py        指定 nodeid のみの実行
+  change_analyzer.py    git diff から変更ファイルと関数・クラス名を抽出
+  prioritizer.py        非AI順位付け (baseline 3種 + fallback)
+  scheduler.py          予算内選択。決定的
+  test_runner.py        指定 nodeid のみの実行、締切と個別 timeout
   history.py            実行時間と失敗回数の履歴
   reporter.py           JSON レポートとコンソール出力
 demo_project/
@@ -63,6 +79,28 @@ tests_internal/         ツール自身のテスト
 data/duration_history.json  計測済み実行時間
 main.py                 CLI
 ```
+
+## 順位付けの方式
+
+| 方式 | 役割 | 内容 |
+|---|---|---|
+| `file_rule` | 評価用 baseline | 変更ファイル名に対応するテストファイルのみ |
+| `duration` | 評価用 baseline | 変更を見ず、短いテストから |
+| `history` | 評価用 baseline | 直近で失敗したテストから |
+| `keyword` | 実運用の fallback | 上記に加え、変更された関数名がテスト名や docstring に現れるか |
+
+baseline を賢くすると比較実験が無意味になるため、`file_rule` は意図的に単純なままにしてあります。`keyword` は「モデルが使えないときに CI を役立たせる」ための最善手なので、制限していません。
+
+## 実測: coupon.py の丸め処理を変更した場合
+
+`_round_percent` の丸めを切り捨てから四捨五入に変えた差分に対し、予算1秒 (フルスイートは4.6秒) で実行した結果です。
+
+| 方式 | 選択数 | 検出した失敗 | checkout の間接的失敗 |
+|---|---|---|---|
+| `file_rule` | 23 / 30 | 1 | **見逃し** |
+| `keyword` | 22 / 30 | 2 | 検出 |
+
+同じ予算で、選択数はむしろ少ないのに検出した失敗は2倍です。`file_rule` は `test_checkout.py` の名前が `coupon.py` と対応しないため、構造的にこの失敗に到達できません。
 
 ## 設計上の決定
 
@@ -81,6 +119,12 @@ main.py                 CLI
 `simulate_io()` は決済ゲートウェイや画像アップロードの I/O 待ちを模したもので、実測
 した処理時間ではない。デモアプリは純粋な算術演算のみでマイクロ秒で終わるため、この
 待ち時間がないと時間予算スケジューリングが成立しない。
+
+**予算は2段階で守る。** プラグインが実時間の締切を持ち、締切を過ぎたテストは開始しません。さらに締切は個々のテストの上限にもなります。開始を止めるだけでは、すでに走っているテストが予算を踏み越えるためです。サブプロセス全体の timeout はその数秒後に置かれた最後の砦で、通常は発動しません。
+
+**実行結果は1件ずつ追記する。** 予算駆動の実行は途中で止まるのが常態です。セッション終了時にまとめて書くと、完了していたテストの結果まで失われます。
+
+**キーワード照合の誤検出は残してある。** 変更された `_round_percent` の "round" が、profile テストの docstring "round trip" と一致し、無関係なアバターアップロードテストを押し上げます。これはトークン照合の実際の限界なので、調整して消さず `tests_internal/test_ranking.py` に固定してあります。モデルがこの誤りを避けられるかどうかが、比較実験の中身です。
 
 **checkout は coupon に間接的に依存する。** `coupon.py` の丸め方を変えると
 `test_checkout.py` の合計金額アサーションが落ちる。ファイル名対応だけのテスト選択が
