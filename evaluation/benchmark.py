@@ -38,6 +38,7 @@ RESULTS_DIR = config.ROOT / "evaluation" / "results"
 
 @dataclass
 class Measurement:
+    repeat: int
     scenario: str
     shape: str
     strategy: str
@@ -108,7 +109,9 @@ def _rank_with_retries(candidates, changes, allowance, fallback, retries):
     return None, attempts, round(min(elapsed, allowance), 3), last
 
 
-def run_scenario(scenario: Scenario, strategies, budget_s: float, retries: int) -> list[Measurement]:
+def run_scenario(
+    scenario: Scenario, strategies, budget_s: float, retries: int, repeat: int = 1
+) -> list[Measurement]:
     with applied(scenario):
         truth = ground_truth()
         candidates = collect_tests(history=DurationHistory.load())
@@ -140,6 +143,7 @@ def run_scenario(scenario: Scenario, strategies, budget_s: float, retries: int) 
             )
             rows.append(
                 Measurement(
+                    repeat=repeat,
                     scenario=scenario.name,
                     shape=scenario.shape,
                     strategy=strategy,
@@ -163,6 +167,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES))
     parser.add_argument("--scenario", action="append", help="repeatable; default is all")
     parser.add_argument("--model-retries", type=int, default=3)
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repeat the whole sweep; the model samples at temperature 1, so one "
+        "pass does not characterise it",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
 
@@ -183,14 +194,18 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.perf_counter()
     rows: list[Measurement] = []
-    for index, scenario in enumerate(chosen, start=1):
-        print(f"[{index}/{len(chosen)}] {scenario.name}", flush=True)
-        rows.extend(run_scenario(scenario, strategies, args.budget, args.model_retries))
+    for repeat in range(1, max(1, args.repeat) + 1):
+        for index, scenario in enumerate(chosen, start=1):
+            print(f"[pass {repeat}] [{index}/{len(chosen)}] {scenario.name}", flush=True)
+            rows.extend(
+                run_scenario(scenario, strategies, args.budget, args.model_retries, repeat)
+            )
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "budget_s": args.budget,
         "model_retries": args.model_retries,
+        "repeats": args.repeat,
         "wall_time_s": round(time.perf_counter() - started, 1),
         "note": (
             "Recall and missed faults are exact. Time to first failure is estimated "
