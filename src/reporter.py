@@ -1,7 +1,9 @@
 """Turn a run into a JSON artifact and a console summary.
 
-The report always names what was *not* run. A green selective run is not a
-green suite, and the report has to say so on its face.
+The report always names what was not run and why. A green selective run is not
+a green suite, and the report has to say so on its face. It also records
+whether the ranking came from the model or from a fallback, so a silently
+degraded run cannot pass for an AI-assisted one.
 """
 
 from __future__ import annotations
@@ -11,9 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src import config
+from src.change_analyzer import ChangeSet
 from src.models import FAILING_OUTCOMES, RunOutcome, TestCandidate
+from src.scheduler import ExecutionPlan
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _OUTCOME_GLYPH = {
     "passed": "PASS",
@@ -28,36 +32,66 @@ _OUTCOME_GLYPH = {
 def build_report(
     outcome: RunOutcome,
     candidates: list[TestCandidate],
-    selection_mode: str,
-    budget_s: float | None = None,
-    selection_reasons: dict[str, str] | None = None,
+    plan: ExecutionPlan,
+    changes: ChangeSet | None = None,
 ) -> dict:
-    selected = set(outcome.selected)
-    unselected = [candidate.nodeid for candidate in candidates if candidate.nodeid not in selected]
-    reasons = selection_reasons or {}
+    rank_of = {nodeid: index + 1 for index, nodeid in enumerate(plan.selected)}
+    executed = set(outcome.selected)
+    skipped_reasons = {item.nodeid: item.reason for item in plan.skipped}
+
+    not_executed = []
+    for candidate in candidates:
+        if candidate.nodeid in executed:
+            continue
+        not_executed.append(
+            {
+                "nodeid": candidate.nodeid,
+                "reason": skipped_reasons.get(candidate.nodeid, "not selected"),
+            }
+        )
+
+    overrun = plan.budget_s > 0 and outcome.wall_time_s + plan.ai_elapsed_s > plan.budget_s
 
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "selection_mode": selection_mode,
-        "budget_s": budget_s,
+        "change": changes.to_dict() if changes else None,
+        "ranking": {
+            "source": plan.ranking_source,
+            "fallback_reason": plan.fallback_reason,
+            "ai_elapsed_s": plan.ai_elapsed_s,
+        },
+        "budget": {
+            "budget_s": plan.budget_s,
+            "ai_elapsed_s": plan.ai_elapsed_s,
+            "available_s": round(plan.available_s, 3),
+            "estimated_selected_s": round(plan.estimated_selected_s, 3),
+            "actual_run_s": outcome.wall_time_s,
+            "total_s": round(outcome.wall_time_s + plan.ai_elapsed_s, 3),
+            "overrun": overrun,
+            "safety_factor": plan.safety_factor,
+        },
         "totals": {
             "collected": len(candidates),
             "selected": len(outcome.selected),
-            "unselected": len(unselected),
-            "wall_time_s": outcome.wall_time_s,
+            "not_executed": len(not_executed),
             **outcome.counts(),
         },
         "exit_status": outcome.exit_status,
-        "timed_out": outcome.timed_out,
+        "hard_killed": outcome.timed_out,
         "results": [
-            {**result.to_dict(), "reason": reasons.get(result.nodeid, "")}
+            {
+                **result.to_dict(),
+                "rank": rank_of.get(result.nodeid),
+                "reason": plan.reasons.get(result.nodeid, ""),
+            }
             for result in outcome.results
         ],
-        "unselected": unselected,
+        "not_executed": not_executed,
+        "warnings": plan.warnings,
         "coverage_caveat": (
             "A green selective run does not certify the full suite. "
-            f"{len(unselected)} collected test(s) were not executed."
+            f"{len(not_executed)} of {len(candidates)} collected test(s) were not executed."
         ),
     }
 
@@ -72,39 +106,98 @@ def write_report(report: dict, path: Path | None = None) -> Path:
     return path
 
 
-def render_console(report: dict) -> str:
-    totals = report["totals"]
+def render_plan(plan: ExecutionPlan, candidates: list[TestCandidate], limit: int = 0) -> str:
+    """Console view of a plan that has not been executed yet."""
+    estimates = {c.nodeid: c.estimated_duration_s for c in candidates}
     lines = [
         "",
-        f"selection mode : {report['selection_mode']}",
+        f"ranking source : {plan.ranking_source}"
+        + (f" (fallback: {plan.fallback_reason})" if plan.fallback_reason else ""),
+        f"budget         : {plan.budget_s:.2f}s"
+        + (f", {plan.ai_elapsed_s:.2f}s spent ranking" if plan.ai_elapsed_s else ""),
+        f"available      : {plan.available_s:.2f}s",
+        f"estimated cost : {plan.estimated_selected_s:.2f}s "
+        f"(durations x{plan.safety_factor} safety factor)",
+        f"selected       : {len(plan.selected)}",
+        f"skipped        : {len(plan.skipped)}",
+        "",
+    ]
+
+    rows = plan.selected if limit <= 0 else plan.selected[:limit]
+    width = max((len(nodeid) for nodeid in rows), default=0)
+    for index, nodeid in enumerate(rows, start=1):
+        estimate = estimates.get(nodeid)
+        shown = f"{estimate:6.3f}s" if estimate is not None else "     ?s"
+        lines.append(f"  {index:>3}. {nodeid:<{width}}  {shown}  {plan.reasons.get(nodeid, '')}")
+    if limit > 0 and len(plan.selected) > limit:
+        lines.append(f"  ... and {len(plan.selected) - limit} more")
+
+    if plan.skipped:
+        lines.append("")
+        lines.append(f"skipped for budget ({len(plan.skipped)}):")
+        for item in plan.skipped[:limit or len(plan.skipped)]:
+            lines.append(f"  {item.nodeid}  [{item.reason}]")
+        if limit > 0 and len(plan.skipped) > limit:
+            lines.append(f"  ... and {len(plan.skipped) - limit} more")
+
+    for warning in plan.warnings:
+        lines.append(f"\nwarning: {warning}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_console(report: dict) -> str:
+    budget = report["budget"]
+    ranking = report["ranking"]
+    totals = report["totals"]
+
+    lines = ["", f"ranking source : {ranking['source']}"]
+    if ranking["fallback_reason"]:
+        lines.append(f"fallback       : {ranking['fallback_reason']}")
+    if report.get("change"):
+        paths = [entry["path"] for entry in report["change"]["files"]]
+        lines.append(f"changed files  : {len(paths)} ({', '.join(paths[:3])}{'...' if len(paths) > 3 else ''})")
+    lines += [
         f"collected      : {totals['collected']}",
         f"selected       : {totals['selected']}",
-        f"not executed   : {totals['unselected']}",
-        f"wall time      : {totals['wall_time_s']:.2f}s"
-        + (f" (budget {report['budget_s']:.2f}s)" if report.get("budget_s") else ""),
+        f"not executed   : {totals['not_executed']}",
+        f"budget         : {budget['budget_s']:.2f}s"
+        if budget["budget_s"]
+        else "budget         : none",
+        f"  ranking      : {budget['ai_elapsed_s']:.2f}s",
+        f"  estimated    : {budget['estimated_selected_s']:.2f}s",
+        f"  actual       : {budget['actual_run_s']:.2f}s",
+        f"  total        : {budget['total_s']:.2f}s"
+        + ("  OVER BUDGET" if budget["overrun"] else ""),
         "",
     ]
 
     width = max((len(item["nodeid"]) for item in report["results"]), default=0)
     for item in report["results"]:
         glyph = _OUTCOME_GLYPH.get(item["outcome"], item["outcome"].upper())
-        lines.append(f"  {glyph:<8} {item['nodeid']:<{width}}  {item['duration_s']:.3f}s")
+        rank = f"{item['rank']:>3}." if item.get("rank") else "   ."
+        lines.append(f"  {rank} {glyph:<8} {item['nodeid']:<{width}}  {item['duration_s']:.3f}s")
 
     failures = [item for item in report["results"] if item["outcome"] in FAILING_OUTCOMES]
     if failures:
         lines.append("")
         lines.append(f"failures ({len(failures)}):")
         for item in failures:
-            first_line = (item.get("message") or "").strip().splitlines()
             lines.append(f"  {item['nodeid']}")
-            if first_line:
-                lines.append(f"    {first_line[-1]}")
+            message = (item.get("message") or "").strip().splitlines()
+            if message:
+                lines.append(f"    {message[-1]}")
+            if item.get("reason"):
+                lines.append(f"    selected because: {item['reason']}")
 
-    if report["unselected"]:
+    if report["not_executed"]:
         lines.append("")
-        lines.append(f"not executed ({len(report['unselected'])}):")
-        for nodeid in report["unselected"]:
-            lines.append(f"  {nodeid}")
+        lines.append(f"not executed ({len(report['not_executed'])}):")
+        for entry in report["not_executed"]:
+            lines.append(f"  {entry['nodeid']}  [{entry['reason']}]")
+
+    for warning in report["warnings"]:
+        lines.append(f"\nwarning: {warning}")
 
     lines.append("")
     lines.append(report["coverage_caveat"])

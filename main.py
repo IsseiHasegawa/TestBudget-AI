@@ -1,8 +1,8 @@
 """TestBudget AI command line entry point.
 
-Phase 1 covers collection, explicit selection and reporting. The Nemotron
-ranking (Phase 2) and the budget scheduler (Phase 3) plug into the same
-collect -> select -> run -> report pipeline.
+The pipeline is collect -> analyse the change -> rank -> plan -> run -> report.
+Only the ranking step is ever delegated to a model, and its output is advice
+that the planner is free to discard. Everything after ranking is deterministic.
 """
 
 from __future__ import annotations
@@ -13,23 +13,36 @@ import sys
 from pathlib import Path
 
 from src import config
+from src.change_analyzer import ChangeAnalysisError, ChangeSet, collect_changes, collect_working_tree_changes
 from src.history import DurationHistory
 from src.models import TestCandidate
-from src.reporter import build_report, render_console, write_report
+from src.prioritizer import STRATEGIES, KEYWORD, rank
+from src.reporter import build_report, render_console, render_plan, write_report
+from src.scheduler import ExecutionPlan, ai_time_allowance, build_plan
 from src.test_collector import CollectionError, collect_tests, validate_nodeids
 from src.test_runner import run_tests
 
 
-def _load_history(path: str | None) -> DurationHistory:
-    return DurationHistory.load(Path(path) if path else None)
+def _history(args: argparse.Namespace) -> DurationHistory:
+    return DurationHistory.load(Path(args.history) if args.history else None)
 
 
-def _collect(args: argparse.Namespace) -> list[TestCandidate]:
-    return collect_tests(target=args.target, history=_load_history(args.history))
+def _changes(args: argparse.Namespace) -> ChangeSet:
+    if args.base:
+        return collect_changes(args.base, args.head)
+    return collect_working_tree_changes()
+
+
+def _must_run(args: argparse.Namespace) -> list[str]:
+    values = list(getattr(args, "must_run", None) or [])
+    if getattr(args, "must_run_file", None):
+        text = Path(args.must_run_file).read_text(encoding="utf-8")
+        values.extend(line.strip() for line in text.splitlines() if line.strip())
+    return values
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    candidates = _collect(args)
+    candidates = collect_tests(target=args.target, history=_history(args))
     if not candidates:
         print(f"no tests collected under {args.target}", file=sys.stderr)
         return 1
@@ -48,10 +61,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         marks = f" [{','.join(candidate.markers)}]" if candidate.markers else ""
         print(f"  {candidate.nodeid:<{width}}  {estimate}  {candidate.summary}{marks}")
 
-    print(
-        f"\n{known}/{len(candidates)} test(s) have measured durations "
-        f"(estimated suite time {total:.2f}s)"
-    )
+    print(f"\n{known}/{len(candidates)} measured (estimated suite time {total:.2f}s)")
     if known < len(candidates):
         print("run `python main.py run --all` once to fill in the missing measurements")
 
@@ -66,39 +76,89 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _requested_nodeids(args: argparse.Namespace) -> list[str]:
-    requested = list(args.nodeid or [])
-    if args.from_file:
-        text = Path(args.from_file).read_text(encoding="utf-8")
-        requested.extend(line.strip() for line in text.splitlines() if line.strip())
-    return requested
+def cmd_changes(args: argparse.Namespace) -> int:
+    changes = _changes(args)
+    if changes.is_empty():
+        print("no changes detected")
+        return 0
+
+    print(f"{changes.base}..{changes.head}: {len(changes.files)} file(s)")
+    if changes.truncated:
+        print("warning: the file list was truncated")
+    for changed in changes.files:
+        symbols = f"  symbols: {', '.join(changed.symbols)}" if changed.symbols else ""
+        print(f"  {changed.status}  +{changed.added_lines:<5} -{changed.removed_lines:<5} {changed.path}{symbols}")
+    return 0
+
+
+def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tuple[ExecutionPlan, ChangeSet]:
+    changes = _changes(args)
+    ranked = rank(args.strategy, candidates, changes)
+    plan = build_plan(
+        ranked,
+        candidates,
+        budget_s=args.budget,
+        ai_elapsed_s=0.0,
+        must_run=_must_run(args),
+        ranking_source=args.strategy,
+        fallback_reason="no model configured yet",
+    )
+    return plan, changes
+
+
+def cmd_select(args: argparse.Namespace) -> int:
+    candidates = collect_tests(target=args.target, history=_history(args))
+    if not candidates:
+        print(f"no tests collected under {args.target}", file=sys.stderr)
+        return 1
+
+    plan, changes = _plan_for(args, candidates)
+    if changes.is_empty():
+        print("warning: no changes detected; the ranking has nothing to work from\n")
+    else:
+        print(f"\nchange: {changes.summary()}")
+    print(render_plan(plan, candidates, limit=args.limit))
+    print(f"model time allowance at this budget: {ai_time_allowance(args.budget):.2f}s")
+    return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    history = _load_history(args.history)
+    history = _history(args)
     candidates = collect_tests(target=args.target, history=history)
     if not candidates:
         print(f"no tests collected under {args.target}", file=sys.stderr)
         return 1
 
+    changes: ChangeSet | None = None
     if args.all:
         selected = [candidate.nodeid for candidate in candidates]
-        mode = "all"
-    else:
-        requested = _requested_nodeids(args)
-        if not requested:
-            print("nothing selected: pass --nodeid, --from-file or --all", file=sys.stderr)
-            return 2
+        plan = ExecutionPlan(selected=selected, budget_s=args.budget or 0.0, ranking_source="all")
+    elif args.nodeid or args.from_file:
+        requested = list(args.nodeid or [])
+        if args.from_file:
+            text = Path(args.from_file).read_text(encoding="utf-8")
+            requested.extend(line.strip() for line in text.splitlines() if line.strip())
         selected, unknown = validate_nodeids(requested, candidates)
-        mode = "manual"
         for nodeid in unknown:
             print(f"discarded unknown nodeid: {nodeid}", file=sys.stderr)
         if not selected:
             print("no valid nodeid left after validation", file=sys.stderr)
             return 2
+        plan = ExecutionPlan(selected=selected, budget_s=args.budget or 0.0, ranking_source="manual")
+    else:
+        if args.budget is None:
+            print("budget mode needs --budget (or use --all / --nodeid)", file=sys.stderr)
+            return 2
+        plan, changes = _plan_for(args, candidates)
+        if changes.is_empty():
+            print("warning: no changes detected; the ranking has nothing to work from")
 
-    outcome = run_tests(selected, timeout_s=args.timeout)
-    report = build_report(outcome, candidates, selection_mode=mode, budget_s=args.timeout)
+    outcome = run_tests(
+        plan.selected,
+        timeout_s=plan.available_s if plan.budget_s else None,
+        per_test_timeout_s=args.per_test_timeout,
+    )
+    report = build_report(outcome, candidates, plan, changes)
     print(render_console(report))
 
     if not args.no_history:
@@ -112,15 +172,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_history(args: argparse.Namespace) -> int:
-    history = _load_history(args.history)
+    history = _history(args)
     if not history.tests:
         print("no history recorded yet; run `python main.py run --all`")
         return 0
 
     rows = sorted(
-        history.tests.items(),
-        key=lambda item: item[1].estimate() or 0.0,
-        reverse=True,
+        history.tests.items(), key=lambda item: item[1].estimate() or 0.0, reverse=True
     )[: args.top]
     width = max(len(nodeid) for nodeid, _ in rows)
 
@@ -142,21 +200,41 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--target", default=config.DEMO_TARGET, help="pytest path to collect from")
     common.add_argument("--history", default=None, help="path to the duration history file")
 
-    collect = sub.add_parser("collect", parents=[common], help="list collected nodeids with durations")
-    collect.add_argument("--json", default=None, help="also write the candidates to this path")
+    diff = argparse.ArgumentParser(add_help=False)
+    diff.add_argument("--base", default=None, help="base ref; omit to use uncommitted changes")
+    diff.add_argument("--head", default="HEAD", help="head ref (default HEAD)")
+
+    ranking = argparse.ArgumentParser(add_help=False)
+    ranking.add_argument("--strategy", default=KEYWORD, choices=sorted(STRATEGIES))
+    ranking.add_argument("--must-run", action="append", help="repeatable; always runs first")
+    ranking.add_argument("--must-run-file", default=None, help="file with one nodeid per line")
+
+    collect = sub.add_parser("collect", parents=[common], help="list collected nodeids")
+    collect.add_argument("--json", default=None, help="also write the candidates here")
     collect.set_defaults(func=cmd_collect)
 
-    run = sub.add_parser("run", parents=[common], help="run a specific set of nodeids")
-    run.add_argument("--nodeid", action="append", help="repeatable; a nodeid to run")
+    changes = sub.add_parser("changes", parents=[diff], help="show what the diff touched")
+    changes.set_defaults(func=cmd_changes)
+
+    select = sub.add_parser(
+        "select", parents=[common, diff, ranking], help="build a plan without running it"
+    )
+    select.add_argument("--budget", type=float, required=True, help="seconds available")
+    select.add_argument("--limit", type=int, default=0, help="truncate the printed lists")
+    select.set_defaults(func=cmd_select)
+
+    run = sub.add_parser("run", parents=[common, diff, ranking], help="plan and run")
+    run.add_argument("--budget", type=float, default=None, help="seconds available")
+    run.add_argument("--nodeid", action="append", help="repeatable; bypass ranking")
     run.add_argument("--from-file", default=None, help="file with one nodeid per line")
     run.add_argument("--all", action="store_true", help="run every collected test")
-    run.add_argument("--timeout", type=float, default=None, help="wall clock ceiling in seconds")
-    run.add_argument("--json", default=None, help="report path (default artifacts/run-<ts>.json)")
-    run.add_argument("--no-history", action="store_true", help="do not update the duration history")
+    run.add_argument("--per-test-timeout", type=float, default=None, help="per test ceiling")
+    run.add_argument("--json", default=None, help="report path")
+    run.add_argument("--no-history", action="store_true", help="do not update the history")
     run.set_defaults(func=cmd_run)
 
     hist = sub.add_parser("history", parents=[common], help="show recorded durations")
-    hist.add_argument("--top", type=int, default=20, help="how many slowest tests to show")
+    hist.add_argument("--top", type=int, default=20)
     hist.set_defaults(func=cmd_history)
 
     return parser
@@ -169,6 +247,9 @@ def main(argv: list[str] | None = None) -> int:
     except CollectionError as exc:
         print(f"collection failed:\n{exc}", file=sys.stderr)
         return 3
+    except ChangeAnalysisError as exc:
+        print(f"change analysis failed: {exc}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":

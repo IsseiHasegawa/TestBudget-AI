@@ -9,10 +9,13 @@ import pytest
 from src.history import DurationHistory
 from src.models import TestResult
 from src.reporter import build_report
+from src.scheduler import ExecutionPlan
 from src.test_collector import collect_tests, validate_nodeids
 from src.test_runner import RunnerError, run_tests
 
 MINI_SUITE = '''
+import time
+
 import pytest
 
 
@@ -40,6 +43,11 @@ def test_errors(broken):
 def test_skipped():
     """always skipped"""
     assert True
+
+
+def test_slow():
+    """outlives any tight budget"""
+    time.sleep(1.5)
 '''
 
 
@@ -96,11 +104,32 @@ def test_runner_preserves_requested_order(mini_project):
     assert [result.nodeid for result in outcome.results] == nodeids
 
 
-def test_runner_marks_everything_timed_out_when_the_budget_expires(mini_project):
-    outcome = run_tests(["suite/test_mini.py::test_ok"], root=mini_project, timeout_s=0.001)
+def test_runner_keeps_finished_results_when_the_budget_runs_out(mini_project):
+    """The deadline must not cost us the results of tests that already passed."""
+    nodeids = ["suite/test_mini.py::test_ok", "suite/test_mini.py::test_slow"]
 
-    assert outcome.timed_out is True
-    assert outcome.results[0].outcome == "timeout"
+    outcome = run_tests(nodeids, root=mini_project, timeout_s=0.6)
+
+    by_nodeid = outcome.by_nodeid()
+    # The point of incremental recording: a finished test keeps its real result.
+    assert by_nodeid["suite/test_mini.py::test_ok"].outcome == "passed"
+
+    slow = by_nodeid["suite/test_mini.py::test_slow"]
+    # Either it was never started or it was cut off, but it never completes.
+    assert slow.outcome in {"not_run", "timeout"}
+    assert slow.duration_s < 1.5
+    # The process stopped on its own, so no hard kill was needed.
+    assert outcome.timed_out is False
+
+
+def test_per_test_timeout_interrupts_a_single_slow_test(mini_project):
+    outcome = run_tests(
+        ["suite/test_mini.py::test_slow"], root=mini_project, per_test_timeout_s=0.3
+    )
+
+    result = outcome.results[0]
+    assert result.outcome == "timeout"
+    assert result.duration_s < 1.5
 
 
 def test_runner_refuses_a_non_list_of_strings():
@@ -144,9 +173,12 @@ def test_report_names_the_tests_that_were_not_run():
     selected = [candidates[0].nodeid]
     outcome = run_tests(selected)
 
-    report = build_report(outcome, candidates, selection_mode="manual", budget_s=3.0)
+    plan = ExecutionPlan(selected=selected, budget_s=3.0, ranking_source="manual")
+    report = build_report(outcome, candidates, plan)
 
     assert report["totals"]["selected"] == 1
-    assert report["totals"]["unselected"] == len(candidates) - 1
-    assert candidates[1].nodeid in report["unselected"]
+    assert report["totals"]["not_executed"] == len(candidates) - 1
+    not_run_ids = [entry["nodeid"] for entry in report["not_executed"]]
+    assert candidates[1].nodeid in not_run_ids
     assert "does not certify" in report["coverage_caveat"]
+    assert report["ranking"]["source"] == "manual"

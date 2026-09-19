@@ -2,6 +2,11 @@
 
 Nodeids are passed as separate argv entries and never joined into a shell
 string, so nothing a model produced can be interpreted as a command.
+
+Two independent stops guard the budget. The plugin holds a wall-clock deadline
+and refuses to start a test past it, which produces a clean `not_run` record.
+The subprocess timeout is only a backstop for a test that ignores its signal,
+so it sits a few seconds later.
 """
 
 from __future__ import annotations
@@ -15,9 +20,28 @@ from pathlib import Path
 from src import config
 from src.models import NOT_RUN, TIMEOUT, RunOutcome, TestResult
 
+# Headroom between the plugin deadline and the hard process kill.
+BACKSTOP_GRACE_S = 5.0
+
 
 class RunnerError(RuntimeError):
     """Raised when pytest could not be started at all."""
+
+
+def _read_jsonl(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    records: dict[str, dict] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a partially flushed final line is not worth failing over
+        records[entry["nodeid"]] = entry
+    return records
 
 
 def run_tests(
@@ -25,6 +49,7 @@ def run_tests(
     root: Path | None = None,
     python: str | None = None,
     timeout_s: float | None = None,
+    per_test_timeout_s: float | None = None,
     extra_args: list[str] | None = None,
 ) -> RunOutcome:
     root = Path(root) if root else config.ROOT
@@ -36,10 +61,15 @@ def run_tests(
         return RunOutcome(results=[], selected=[], wall_time_s=0.0, exit_status=None)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        out_path = Path(tmpdir) / "results.json"
+        out_path = Path(tmpdir) / "results.jsonl"
         env = config.subprocess_env(root)
         env["TB_RESULT_OUT"] = str(out_path)
         env.pop("TB_COLLECT_OUT", None)
+
+        if timeout_s is not None:
+            env["TB_DEADLINE_TS"] = str(time.time() + timeout_s)
+        if per_test_timeout_s is not None:
+            env["TB_TEST_TIMEOUT_S"] = str(per_test_timeout_s)
 
         command = [
             python,
@@ -65,27 +95,23 @@ def run_tests(
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=timeout_s,
+                timeout=(timeout_s + BACKSTOP_GRACE_S) if timeout_s is not None else None,
             )
             exit_status = completed.returncode
             stderr_tail = completed.stderr[-2000:]
         except subprocess.TimeoutExpired as exc:
             timed_out = True
-            stderr_tail = (exc.stderr or b"").decode("utf-8", "replace")[-2000:] if isinstance(exc.stderr, bytes) else (exc.stderr or "")[-2000:]
+            raw = exc.stderr or b""
+            stderr_tail = (raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw)[-2000:]
         wall_time_s = time.perf_counter() - started
 
-        recorded: dict[str, dict] = {}
-        if out_path.exists():
-            payload = json.loads(out_path.read_text(encoding="utf-8"))
-            if exit_status is None:
-                exit_status = payload.get("exit_status")
-            recorded = {entry["nodeid"]: entry for entry in payload.get("results", [])}
+        recorded = _read_jsonl(out_path)
 
     results = []
     for nodeid in nodeids:
         entry = recorded.get(nodeid)
         if entry is None:
-            # The process died or ran out of time before reaching this test.
+            # The process was killed before this test produced a record.
             results.append(TestResult(nodeid=nodeid, outcome=TIMEOUT if timed_out else NOT_RUN))
             continue
         results.append(
