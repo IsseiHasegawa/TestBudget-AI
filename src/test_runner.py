@@ -51,6 +51,7 @@ def run_tests(
     timeout_s: float | None = None,
     per_test_timeout_s: float | None = None,
     extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> RunOutcome:
     root = Path(root) if root else config.ROOT
     python = python or config.default_python()
@@ -70,6 +71,8 @@ def run_tests(
             env["TB_DEADLINE_TS"] = str(time.time() + timeout_s)
         if per_test_timeout_s is not None:
             env["TB_TEST_TIMEOUT_S"] = str(per_test_timeout_s)
+        if extra_env:
+            env.update(extra_env)
 
         command = [
             python,
