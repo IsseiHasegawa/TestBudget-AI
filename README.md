@@ -248,6 +248,17 @@ upload. It is simulated latency, not measured work. The demo app is pure
 arithmetic and would finish in microseconds, which leaves a time budget nothing
 to schedule around.
 
+**The demo suite is deliberately longer than the budget.** At roughly two and a
+half minutes against a 60s budget, something always has to be left out, which
+is the only condition under which a ranking can be judged. An earlier version
+ran in 4.6s, and every strategy scored identically because every strategy fit
+everything. The durations are tuned so the coupon group plus the affected
+checkout tests just fit, and the slow unrelated tests cannot.
+
+Set `TB_LATENCY_SCALE=0.02` to shrink every wait while iterating locally.
+Durations recorded at a reduced scale describe nothing real, so pass
+`--no-history` whenever the scale is not 1.0.
+
 **checkout depends on coupon indirectly.** Changing the rounding in
 `coupon.py` breaks the total assertions in `test_checkout.py`. A test filter
 based on file names misses exactly this kind of change, and it is the case the
@@ -257,7 +268,15 @@ evaluation is built around.
 
 ```bash
 ./.venv/bin/python -m pip install -r requirements-dev.txt
-./.venv/bin/python -m pytest -q     # 30 demo tests + 50 tooling tests
+
+# Everything, at real durations. Takes about two and a half minutes.
+./.venv/bin/python -m pytest -q
+
+# The same tests with the simulated waits shrunk, for an edit loop.
+TB_LATENCY_SCALE=0.01 ./.venv/bin/python -m pytest -q
+
+# Just the tooling tests, which never wait on anything.
+./.venv/bin/python -m pytest tests_internal -q
 ```
 
 The workflow tests need PyYAML, which is in the dev requirements only. Without
