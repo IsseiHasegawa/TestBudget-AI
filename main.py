@@ -10,13 +10,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from src import config
 from src.change_analyzer import ChangeAnalysisError, ChangeSet, collect_changes, collect_working_tree_changes
 from src.history import DurationHistory
 from src.models import TestCandidate
-from src.prioritizer import STRATEGIES, KEYWORD, rank
+from src.model_response import ResponseRejected
+from src.nemotron_client import is_configured, model_name, rank_with_model
+from src.prioritizer import NEMOTRON, STRATEGIES, KEYWORD, from_model_order, rank
 from src.reporter import build_report, render_console, render_plan, write_report
 from src.scheduler import ExecutionPlan, ai_time_allowance, build_plan
 from src.test_collector import CollectionError, collect_tests, validate_nodeids
@@ -91,17 +94,53 @@ def cmd_changes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rank(args, candidates, changes):
+    """Produce an ordering plus the metadata the report needs.
+
+    The deterministic ranking is computed first and unconditionally, so the
+    model call has something to degrade to. A failure here is ordinary control
+    flow, not an error path.
+    """
+    fallback = rank(args.fallback_strategy, candidates, changes)
+    if args.strategy != NEMOTRON:
+        return rank(args.strategy, candidates, changes), args.strategy, None, 0.0, {}
+
+    allowance = ai_time_allowance(args.budget)
+    started = time.perf_counter()
+    try:
+        result = rank_with_model(
+            candidates, changes, allowance, [item.nodeid for item in fallback]
+        )
+    except ResponseRejected as exc:
+        elapsed = round(time.perf_counter() - started, 3)
+        info = {"attempted": True, "model": model_name(), "allowance_s": allowance, "detail": exc.detail}
+        return fallback, args.fallback_strategy, exc.reason, elapsed, info
+
+    info = {
+        "attempted": True,
+        "model": result.model,
+        "allowance_s": allowance,
+        "attempts": result.attempts,
+        "latency_s": result.latency_s,
+        "discarded": result.discarded,
+        "completed_by_fallback": result.completed_by_fallback,
+    }
+    ranked = from_model_order(result.order, result.reasons, result.completed_by_fallback)
+    return ranked, NEMOTRON, None, result.latency_s, info
+
+
 def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tuple[ExecutionPlan, ChangeSet]:
     changes = _changes(args)
-    ranked = rank(args.strategy, candidates, changes)
+    ranked, source, fallback_reason, ai_elapsed, info = _rank(args, candidates, changes)
     plan = build_plan(
         ranked,
         candidates,
         budget_s=args.budget,
-        ai_elapsed_s=0.0,
+        ai_elapsed_s=ai_elapsed,
         must_run=_must_run(args),
-        ranking_source=args.strategy,
-        fallback_reason="no model configured yet",
+        ranking_source=source,
+        fallback_reason=fallback_reason,
+        model_info=info,
     )
     return plan, changes
 
@@ -119,6 +158,8 @@ def cmd_select(args: argparse.Namespace) -> int:
         print(f"\nchange: {changes.summary()}")
     print(render_plan(plan, candidates, limit=args.limit))
     print(f"model time allowance at this budget: {ai_time_allowance(args.budget):.2f}s")
+    if not is_configured():
+        print("NVIDIA_API_KEY is not set; --strategy nemotron would fall back immediately")
     return 0
 
 
@@ -205,7 +246,15 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--head", default="HEAD", help="head ref (default HEAD)")
 
     ranking = argparse.ArgumentParser(add_help=False)
-    ranking.add_argument("--strategy", default=KEYWORD, choices=sorted(STRATEGIES))
+    ranking.add_argument(
+        "--strategy", default=KEYWORD, choices=sorted({*STRATEGIES, NEMOTRON})
+    )
+    ranking.add_argument(
+        "--fallback-strategy",
+        default=KEYWORD,
+        choices=sorted(STRATEGIES),
+        help="ordering used when the model is unavailable or rejected",
+    )
     ranking.add_argument("--must-run", action="append", help="repeatable; always runs first")
     ranking.add_argument("--must-run-file", default=None, help="file with one nodeid per line")
 

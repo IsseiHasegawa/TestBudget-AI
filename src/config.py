@@ -40,3 +40,20 @@ def subprocess_env(root: Path) -> dict[str, str]:
     entries = dict.fromkeys(filter(None, [str(ROOT), str(root), existing]))
     env["PYTHONPATH"] = os.pathsep.join(entries)
     return env
+
+
+def load_env_file(path: Path | None = None) -> None:
+    """Populate os.environ from a .env file without overwriting real env vars.
+
+    A six line parser beats a dependency here, and it keeps the secret out of
+    argv and out of any file the repository tracks.
+    """
+    target = Path(path) if path else ROOT / ".env"
+    if not target.exists():
+        return
+    for line in target.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))

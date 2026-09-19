@@ -173,6 +173,31 @@ def rank_by_keyword(candidates: list[TestCandidate], changes: ChangeSet) -> list
     return _sorted(ranked, candidates)
 
 
+NEMOTRON = "nemotron"
+
+
+def from_model_order(
+    order: list[str],
+    reasons: dict[str, str],
+    completed_by_fallback: list[str] | None = None,
+) -> list[RankedTest]:
+    """Wrap a validated model order in the same shape the baselines produce.
+
+    Scores descend by position so the scheduler needs no special case: it packs
+    a model order exactly as it packs a keyword order.
+    """
+    filled = set(completed_by_fallback or [])
+    total = len(order)
+    ranked = []
+    for index, nodeid in enumerate(order):
+        if nodeid in filled:
+            reason = "not ranked by the model; appended in deterministic order"
+        else:
+            reason = reasons.get(nodeid, "ranked by the model")
+        ranked.append(RankedTest(nodeid, float(total - index), reason, NEMOTRON))
+    return ranked
+
+
 _DISPATCH = {
     FILE_RULE: rank_by_file_rule,
     DURATION: rank_by_duration,

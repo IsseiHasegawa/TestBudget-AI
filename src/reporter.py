@@ -60,6 +60,7 @@ def build_report(
             "source": plan.ranking_source,
             "fallback_reason": plan.fallback_reason,
             "ai_elapsed_s": plan.ai_elapsed_s,
+            "model": plan.model_info,
         },
         "budget": {
             "budget_s": plan.budget_s,
@@ -154,6 +155,19 @@ def render_console(report: dict) -> str:
     lines = ["", f"ranking source : {ranking['source']}"]
     if ranking["fallback_reason"]:
         lines.append(f"fallback       : {ranking['fallback_reason']}")
+    model = ranking.get("model") or {}
+    if model.get("attempted"):
+        detail = f" ({model['detail']})" if model.get("detail") else ""
+        lines.append(
+            f"model          : {model.get('model', '?')} "
+            f"allowance {model.get('allowance_s', 0):.2f}s"
+            + (f", {model['latency_s']:.2f}s in {model.get('attempts', 1)} attempt(s)" if model.get("latency_s") else "")
+            + detail
+        )
+        if model.get("discarded"):
+            lines.append(f"discarded ids  : {len(model['discarded'])}")
+        if model.get("completed_by_fallback"):
+            lines.append(f"model omitted  : {len(model['completed_by_fallback'])} test(s), appended deterministically")
     if report.get("change"):
         paths = [entry["path"] for entry in report["change"]["files"]]
         lines.append(f"changed files  : {len(paths)} ({', '.join(paths[:3])}{'...' if len(paths) > 3 else ''})")

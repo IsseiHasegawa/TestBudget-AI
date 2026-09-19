@@ -45,6 +45,7 @@ class ExecutionPlan:
     safety_factor: float = config.DURATION_SAFETY_FACTOR
     ranking_source: str = "unknown"
     fallback_reason: str | None = None
+    model_info: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -58,6 +59,7 @@ class ExecutionPlan:
             "safety_factor": self.safety_factor,
             "ranking_source": self.ranking_source,
             "fallback_reason": self.fallback_reason,
+            "model": self.model_info,
             "warnings": self.warnings,
         }
 
@@ -90,6 +92,7 @@ def build_plan(
     safety_factor: float = config.DURATION_SAFETY_FACTOR,
     ranking_source: str = "keyword",
     fallback_reason: str | None = None,
+    model_info: dict | None = None,
 ) -> ExecutionPlan:
     by_nodeid = {candidate.nodeid: candidate for candidate in candidates}
     must_run = [nodeid for nodeid in (must_run or []) if nodeid in by_nodeid]
@@ -101,6 +104,7 @@ def build_plan(
         safety_factor=safety_factor,
         ranking_source=ranking_source,
         fallback_reason=fallback_reason,
+        model_info=model_info or {},
     )
     plan.reasons = {item.nodeid: item.reason for item in ranked}
 

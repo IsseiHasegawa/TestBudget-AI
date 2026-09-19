@@ -19,6 +19,7 @@ HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 MAX_FILES = 40
 MAX_SYMBOLS_PER_FILE = 12
+MAX_DIFF_CHARS = 2000
 
 
 class ChangeAnalysisError(RuntimeError):
@@ -57,6 +58,7 @@ class ChangeSet:
     head: str
     files: list[ChangedFile] = field(default_factory=list)
     truncated: bool = False
+    diff_text: str = ""
 
     def is_empty(self) -> bool:
         return not self.files
@@ -78,6 +80,11 @@ class ChangeSet:
             "truncated": self.truncated,
             "files": [changed.to_dict() for changed in self.files],
         }
+
+    def diff_excerpt(self, max_chars: int = MAX_DIFF_CHARS) -> str:
+        if len(self.diff_text) <= max_chars:
+            return self.diff_text
+        return self.diff_text[:max_chars] + "\n... (diff truncated)"
 
     def summary(self) -> str:
         parts = []
@@ -179,7 +186,14 @@ def collect_changes(
                 changed.symbols = _enclosing_symbols(source, changed_lines)
         files.append(changed)
 
-    return ChangeSet(base=base, head=head, files=files, truncated=truncated)
+    try:
+        diff_text = _git(["diff", "--unified=3", f"{base}..{head}"], root)
+    except ChangeAnalysisError:
+        diff_text = ""
+
+    return ChangeSet(
+        base=base, head=head, files=files, truncated=truncated, diff_text=diff_text
+    )
 
 
 def collect_working_tree_changes(root: Path | None = None) -> ChangeSet:
@@ -219,4 +233,9 @@ def collect_working_tree_changes(root: Path | None = None) -> ChangeSet:
                 )
         files.append(changed)
 
-    return ChangeSet(base="HEAD", head="working-tree", files=files)
+    try:
+        diff_text = _git(["diff", "--unified=3", "HEAD"], root)
+    except ChangeAnalysisError:
+        diff_text = ""
+
+    return ChangeSet(base="HEAD", head="working-tree", files=files, diff_text=diff_text)
