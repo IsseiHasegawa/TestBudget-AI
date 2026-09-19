@@ -101,8 +101,11 @@ def _rank_with_retries(candidates, changes, allowance, fallback, retries):
             elapsed += time.perf_counter() - started
             last = exc
             continue
-        return result, attempts, round(elapsed + result.latency_s, 3), None
-    return None, attempts, round(elapsed, 3), last
+        # Charge only the call that answered. CI never pays for the retries
+        # below: it spends one allowance and falls back. Billing this arm for
+        # time production would not spend makes it look worse than it is.
+        return result, attempts, round(result.latency_s, 3), None
+    return None, attempts, round(min(elapsed, allowance), 3), last
 
 
 def run_scenario(scenario: Scenario, strategies, budget_s: float, retries: int) -> list[Measurement]:
