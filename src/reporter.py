@@ -217,3 +217,80 @@ def render_console(report: dict) -> str:
     lines.append(report["coverage_caveat"])
     lines.append("")
     return "\n".join(lines)
+
+
+def render_markdown(report: dict) -> str:
+    """Report as markdown, for a GitHub Actions job summary.
+
+    Writing to the step summary needs no repository permission at all, unlike
+    posting a pull request comment, so the workflow can stay on contents:read.
+    """
+    budget = report["budget"]
+    ranking = report["ranking"]
+    totals = report["totals"]
+    model = ranking.get("model") or {}
+
+    source = ranking["source"]
+    if ranking["fallback_reason"]:
+        source = f"{source} (fell back: `{ranking['fallback_reason']}`)"
+
+    failures = [item for item in report["results"] if item["outcome"] in FAILING_OUTCOMES]
+    headline = f"{len(failures)} failing" if failures else "no failures"
+
+    lines = [
+        "## TestBudget AI",
+        "",
+        f"**{totals['selected']} of {totals['collected']} tests run in "
+        f"{budget['total_s']:.1f}s, {headline}.**",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| Ranking | {source} |",
+    ]
+    if model.get("attempted"):
+        detail = model.get("detail") or (
+            f"{model.get('latency_s', 0):.2f}s in {model.get('attempts', 1)} attempt(s)"
+        )
+        lines.append(f"| Model | `{model.get('model', '?')}` {detail} |")
+    if report.get("change"):
+        paths = [entry["path"] for entry in report["change"]["files"]]
+        lines.append(f"| Changed files | {len(paths)}: {', '.join(f'`{p}`' for p in paths[:5])} |")
+    lines += [
+        f"| Budget | {budget['budget_s']:.1f}s "
+        f"({budget['ai_elapsed_s']:.1f}s ranking, {budget['actual_run_s']:.1f}s tests) |",
+        f"| Not executed | {totals['not_executed']} |",
+        "",
+    ]
+
+    if budget["overrun"]:
+        lines += ["> Budget exceeded.", ""]
+    for warning in report["warnings"]:
+        lines += [f"> {warning}", ""]
+
+    if failures:
+        lines += ["### Failures", ""]
+        for item in failures:
+            lines.append(f"- `{item['nodeid']}` ({item['outcome']})")
+            if item.get("reason"):
+                lines.append(f"  - selected because: {item['reason']}")
+        lines.append("")
+
+    lines += ["<details><summary>Executed, in the order chosen</summary>", ""]
+    for item in report["results"]:
+        rank = item.get("rank") or "-"
+        lines.append(
+            f"{rank}. `{item['nodeid']}` {item['outcome']} ({item['duration_s']:.3f}s)"
+        )
+    lines += ["", "</details>", ""]
+
+    if report["not_executed"]:
+        lines += [
+            f"<details><summary>Not executed ({len(report['not_executed'])})</summary>",
+            "",
+        ]
+        for entry in report["not_executed"]:
+            lines.append(f"- `{entry['nodeid']}` ({entry['reason']})")
+        lines += ["", "</details>", ""]
+
+    lines += ["", f"_{report['coverage_caveat']}_", ""]
+    return "\n".join(lines)

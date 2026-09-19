@@ -1,0 +1,50 @@
+# The actual quality gate. Runs every test with no budget and no ranking, so a
+# selective run can never stand in for it.
+#
+# Make this the required status check in branch protection, not TestBudget.
+
+name: Full suite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Catches anything that only fails outside a pull request.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-suite-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        # Dev requirements, so the workflow tests actually run here instead of
+        # skipping for want of PyYAML.
+        run: python -m pip install --quiet -r requirements-dev.txt
+
+      - name: Run every test
+        run: python -m pytest -q
+
+      - name: Record the result
+        if: always()
+        run: |
+          echo "## Full suite" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Every collected test ran, with no budget and no ranking." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,109 @@
+# Selective CI: rank the tests a pull request is likely to break, run what
+# fits a time budget, and report what it did not run.
+#
+# This job is fast feedback, not a quality gate. A green run here says the
+# selected tests passed, not that the suite passed. The required check for
+# merging is full-suite.yml.
+
+name: TestBudget (selective)
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: Seconds available for ranking plus test execution
+        default: "60"
+      strategy:
+        description: Ranking strategy
+        default: nemotron
+        type: choice
+        options: [nemotron, keyword, file_rule, duration, history]
+
+# Read only. Results go to the job summary, which needs no permission, rather
+# than to a pull request comment, which would need pull-requests: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: testbudget-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selective:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ranking needs the diff against the base, so the full history
+          # has to be present.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --quiet -r requirements.txt
+
+      - name: Decide how to rank
+        id: plan
+        env:
+          # `pull_request` withholds secrets from forked pull requests, so this
+          # is already empty for a fork. The explicit check is a second lock on
+          # the same door: untrusted code must never reach a funded API call.
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          HAS_KEY: ${{ secrets.NVIDIA_API_KEY != '' }}
+          REQUESTED: ${{ inputs.strategy || 'nemotron' }}
+        run: |
+          if [ "$IS_FORK" = "true" ]; then
+            echo "fork pull request: ranking without the model"
+            echo "strategy=keyword" >> "$GITHUB_OUTPUT"
+            echo "use_model=false" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_KEY" != "true" ]; then
+            echo "NVIDIA_API_KEY is not configured: ranking without the model"
+            echo "strategy=keyword" >> "$GITHUB_OUTPUT"
+            echo "use_model=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ranking with $REQUESTED"
+            echo "strategy=$REQUESTED" >> "$GITHUB_OUTPUT"
+            echo "use_model=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show what changed
+        run: |
+          python main.py changes --base "${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
+
+      - name: Run the selected tests
+        id: run
+        env:
+          # Empty unless the previous step decided the model may be used.
+          NVIDIA_API_KEY: ${{ steps.plan.outputs.use_model == 'true' && secrets.NVIDIA_API_KEY || '' }}
+          NEMOTRON_MODEL: ${{ vars.NEMOTRON_MODEL }}
+          NEMOTRON_BASE_URL: ${{ vars.NEMOTRON_BASE_URL }}
+        run: |
+          python main.py run \
+            --base "${{ github.event.pull_request.base.sha || 'HEAD~1' }}" \
+            --budget "${{ inputs.budget || '60' }}" \
+            --strategy "${{ steps.plan.outputs.strategy }}" \
+            --per-test-timeout 60 \
+            --no-history \
+            --json artifacts/selective.json \
+            --markdown "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testbudget-report
+          path: artifacts/selective.json
+          if-no-files-found: warn
+
+      - name: Restate the limit of this job
+        if: always()
+        run: |
+          echo "This job ran a subset. It does not certify the suite." >> "$GITHUB_STEP_SUMMARY"
+          echo "The merge gate is the full-suite workflow." >> "$GITHUB_STEP_SUMMARY"

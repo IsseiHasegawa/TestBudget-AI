@@ -1,0 +1,3 @@
+-r requirements.txt
+# Only the workflow tests need this. The tool itself runs on the standard library.
+PyYAML>=6.0

@@ -18,7 +18,7 @@ involved, which also produced the baselines the evaluation compares against.
 | P1 | Sample app, 30 pytest tests, nodeid collection, duration history, selective execution, JSON report | Done |
 | P3 | Git diff analysis, non-AI ranking, budget scheduler, timeouts, extended reporting | Done |
 | P2 | Nemotron client, structured output, validation pipeline | Done |
-| P4 | GitHub Actions, secrets and permissions | Not started |
+| P4 | GitHub Actions, secrets and permissions | Done |
 | P5 | Non-AI baselines, ten or more change scenarios, evaluation | Not started |
 | P6 | Demo PR, results view, presentation | Not started |
 
@@ -73,6 +73,9 @@ alongside the ones that were.
 ## Layout
 
 ```
+.github/workflows/
+  testbudget.yml        selective CI on a pull request, advisory
+  full-suite.yml        the merge gate: every test, no budget, no ranking
 src/
   config.py             shared paths, defaults, pytest subprocess environment
   models.py             TestCandidate / TestResult / RunOutcome
@@ -145,6 +148,50 @@ That row is one successful call. Two of three attempts at the same budget hit
 the nine second allowance and degraded to the keyword ordering. The report
 records that rate rather than hiding it.
 
+## Continuous integration
+
+Two workflows, and the difference between them matters.
+
+| Workflow | Trigger | What it proves |
+|---|---|---|
+| `testbudget.yml` | pull request | The selected tests passed inside the budget. Advisory |
+| `full-suite.yml` | pull request, push to main, nightly | Every test passed. This is the gate |
+
+**Make `full-suite` the required status check, not `TestBudget`.** A selective
+run is fast feedback. It cannot certify a suite it did not finish, and its job
+summary says so on every run.
+
+Both workflows take `contents: read` and nothing more. Results go to the job
+summary, which needs no permission at all, rather than to a pull request
+comment, which would need `pull-requests: write`.
+
+### Untrusted pull requests
+
+Neither workflow uses `pull_request_target`, which would run fork code with
+secrets in scope. On `pull_request`, GitHub already withholds secrets from
+forks, so a fork PR finds no API key, and the client degrades to the keyword
+ranking on its own.
+
+The selective workflow checks the fork flag anyway and forces `keyword` before
+the key is ever placed in the environment. That is a second lock on the same
+door: the failure being guarded against is a funded API call driven by code
+nobody has reviewed.
+
+`tests_internal/test_workflows.py` asserts these properties, because a typo in
+YAML would otherwise surface only once it was running against a real pull
+request.
+
+### Configuration
+
+| Name | Kind | Purpose |
+|---|---|---|
+| `NVIDIA_API_KEY` | secret | Omit it and CI still works, ranking with `keyword` |
+| `NEMOTRON_MODEL` | variable | Overrides the default model id |
+| `NEMOTRON_BASE_URL` | variable | Points at a self-hosted NIM instead of the hosted catalogue |
+
+The selective job runs with `--no-history`, so it never needs to write back to
+the repository for the sake of a disposable timing number.
+
 ## Design decisions
 
 **Nodeids come from pytest itself.** Rebuilding them from junit-xml class names
@@ -209,5 +256,9 @@ evaluation is built around.
 ## Verifying
 
 ```bash
-./.venv/bin/python -m pytest -q     # 30 demo tests + 39 tooling tests
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest -q     # 30 demo tests + 50 tooling tests
 ```
+
+The workflow tests need PyYAML, which is in the dev requirements only. Without
+it they skip rather than fail.

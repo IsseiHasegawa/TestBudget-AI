@@ -20,7 +20,7 @@ from src.models import TestCandidate
 from src.model_response import ResponseRejected
 from src.nemotron_client import is_configured, model_name, rank_with_model
 from src.prioritizer import NEMOTRON, STRATEGIES, KEYWORD, from_model_order, rank
-from src.reporter import build_report, render_console, render_plan, write_report
+from src.reporter import build_report, render_console, render_markdown, render_plan, write_report
 from src.scheduler import ExecutionPlan, ai_time_allowance, build_plan
 from src.test_collector import CollectionError, collect_tests, validate_nodeids
 from src.test_runner import run_tests
@@ -209,6 +209,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     path = write_report(report, Path(args.json) if args.json else None)
     print(f"report written: {path}")
 
+    if args.markdown:
+        markdown_path = Path(args.markdown)
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        # Appended, because GITHUB_STEP_SUMMARY may already hold earlier output.
+        with markdown_path.open("a", encoding="utf-8") as handle:
+            handle.write(render_markdown(report))
+        print(f"markdown written: {markdown_path}")
+
     return 1 if outcome.failures() else 0
 
 
@@ -279,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--all", action="store_true", help="run every collected test")
     run.add_argument("--per-test-timeout", type=float, default=None, help="per test ceiling")
     run.add_argument("--json", default=None, help="report path")
+    run.add_argument("--markdown", default=None, help="append a markdown summary here")
     run.add_argument("--no-history", action="store_true", help="do not update the history")
     run.set_defaults(func=cmd_run)
 
