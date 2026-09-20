@@ -183,7 +183,9 @@ def render_console(report: dict) -> str:
         f"budget         : {budget['budget_s']:.2f}s"
         if budget["budget_s"]
         else "budget         : none",
-        f"  ranking      : {budget['ai_elapsed_s']:.2f}s",
+        f"  ranking      : {budget['ai_elapsed_s']:.2f}s"
+        + (f" of {model['allowance_s']:.2f}s allowed" if model.get("allowance_s") else ""),
+        f"  for tests    : {budget['available_s']:.2f}s",
         f"  estimated    : {budget['estimated_selected_s']:.2f}s",
         f"  actual       : {budget['actual_run_s']:.2f}s",
         f"  total        : {budget['total_s']:.2f}s"
@@ -261,8 +263,11 @@ def render_markdown(report: dict) -> str:
         paths = [entry["path"] for entry in report["change"]["files"]]
         lines.append(f"| Changed files | {len(paths)}: {', '.join(f'`{p}`' for p in paths[:5])} |")
     lines += [
-        f"| Budget | {budget['budget_s']:.1f}s "
-        f"({budget['ai_elapsed_s']:.1f}s ranking, {budget['actual_run_s']:.1f}s tests) |",
+        f"| Budget | {budget['budget_s']:.1f}s total: "
+        f"{budget['ai_elapsed_s']:.1f}s ranking"
+        + (f" of {model['allowance_s']:.1f}s allowed" if model.get("allowance_s") else "")
+        + f", {budget['available_s']:.1f}s for tests "
+        f"({budget['actual_run_s']:.1f}s used) |",
         f"| Not executed | {totals['not_executed']} |",
         "",
     ]

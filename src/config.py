@@ -28,6 +28,22 @@ def default_python() -> str:
     return sys.executable
 
 
+def env_float(name: str, default: float) -> float:
+    """Read a float from the environment, ignoring anything unusable.
+
+    A malformed value falls back to the default rather than raising: a typo in
+    a CI variable should not take the whole run down, and the default is always
+    a workable setting.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def subprocess_env(root: Path) -> dict[str, str]:
     """Environment for a spawned pytest.
 

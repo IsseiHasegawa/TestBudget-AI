@@ -12,13 +12,18 @@ on:
   workflow_dispatch:
     inputs:
       budget:
-        description: Seconds available for ranking plus test execution
-        default: "60"
+        description: Total seconds for ranking plus test execution
+        default: "90"
       strategy:
         description: Ranking strategy
         default: nemotron
         type: choice
         options: [nemotron, keyword, file_rule, duration, history]
+      ranking_budget:
+        description: >-
+          Seconds the model may take before the scheduler gives up on it. Taken
+          literally, so the rest of the budget stays with the tests.
+        default: "20"
 
 # Read only. Results go to the job summary, which needs no permission, rather
 # than to a pull request comment, which would need pull-requests: write.
@@ -87,7 +92,8 @@ jobs:
         run: |
           python main.py run \
             --base "${{ github.event.pull_request.base.sha || 'HEAD~1' }}" \
-            --budget "${{ inputs.budget || '60' }}" \
+            --budget "${{ inputs.budget || '90' }}" \
+            --ranking-budget "${{ inputs.ranking_budget || '20' }}" \
             --strategy "${{ steps.plan.outputs.strategy }}" \
             --per-test-timeout 60 \
             --no-history \
