@@ -94,12 +94,27 @@ jobs:
             --json artifacts/selective.json \
             --markdown "$GITHUB_STEP_SUMMARY"
 
+      - name: Generate detailed test selection report
+        if: always()
+        run: |
+          if [ -f artifacts/selective.json ]; then
+            python -m src.selection_report \
+              artifacts/selective.json \
+              --output artifacts/test-selection-report.md
+
+            cat artifacts/test-selection-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Detailed selection report unavailable: no JSON report was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: testbudget-report
-          path: artifacts/selective.json
+          path: |
+            artifacts/selective.json
+            artifacts/test-selection-report.md
           if-no-files-found: warn
 
       - name: Restate the limit of this job

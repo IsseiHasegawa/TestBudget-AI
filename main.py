@@ -133,6 +133,11 @@ def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tupl
     changes = _changes(args)
     ranked, source, fallback_reason, ai_elapsed, info = _rank(args, candidates, changes)
 
+    original_ranks = {
+        item.nodeid: position
+        for position, item in enumerate(ranked, start=1)
+    }
+
     excluded = []
     relevant_found = True
 
@@ -166,13 +171,45 @@ def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tupl
     )
     if getattr(args, "selection_policy", "fill") == "relevant":
         if relevant_found:
-            plan.skipped.extend(
-                SkippedTest(
-                    item.nodeid,
-                    "excluded by experimental relevance policy",
+            from src.scheduler import SelectionEvidence, _estimate
+
+            candidate_by_nodeid = {
+                candidate.nodeid: candidate
+                for candidate in candidates
+            }
+
+            for item in excluded:
+                candidate = candidate_by_nodeid[item.nodeid]
+                keyword_score = keyword_scores[item.nodeid]
+
+                plan.skipped.append(
+                    SkippedTest(
+                        item.nodeid,
+                        "excluded by experimental relevance policy",
+                    )
                 )
-                for item in excluded
-            )
+
+                plan.decision_records[item.nodeid] = SelectionEvidence(
+                    nodeid=item.nodeid,
+                    status="NOT_SELECTED",
+                    decision_code="relevance_filter",
+                    decision_reason=(
+                        "Excluded by experimental relevance policy: "
+                        f"keyword score {keyword_score:.3f} is below 1.0."
+                    ),
+                    rank=original_ranks[item.nodeid],
+                    ranking_score=item.score,
+                    ranking_source=source,
+                    ranking_reason=item.reason,
+                    estimated_duration_s=candidate.estimated_duration_s,
+                    estimated_cost_s=round(
+                        _estimate(candidate) * plan.safety_factor, 3
+                    ),
+                    remaining_budget_before_s=None,
+                    cumulative_cost_before_s=None,
+                    cumulative_cost_after_s=None,
+                )
+
             plan.warnings.append(
                 "experimental relevance policy: only tests with a "
                 "keyword relevance score >= 1.0 were eligible"

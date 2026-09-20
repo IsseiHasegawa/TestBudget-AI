@@ -119,3 +119,41 @@ def test_relevant_policy_uses_original_plan_if_no_strong_match(monkeypatch):
         "found no strong matches" in warning
         for warning in plan.warnings
     )
+
+
+def test_relevant_policy_records_evidence_for_excluded_test(monkeypatch):
+    """Record the actual relevance-filter decision, not a budget rejection."""
+    unrelated = "tests/test_profile.py::test_avatar"
+    related = "tests/test_discount.py::test_rounding"
+
+    plan = make_plan(
+        monkeypatch,
+        policy="relevant",
+        keyword_scores={
+            unrelated: 0.25,
+            related: 4.0,
+        },
+        model_order=[unrelated, related],
+    )
+
+    # The selection result must remain unchanged.
+    assert plan.selected == [related]
+
+    # Both the selected and excluded tests must have decision records.
+    assert set(plan.decision_records) == {unrelated, related}
+
+    excluded = plan.decision_records[unrelated]
+    assert excluded.status == "NOT_SELECTED"
+    assert excluded.decision_code == "relevance_filter"
+    assert "keyword score 0.250" in excluded.decision_reason
+
+    # The original model ranking and the keyword filter score are distinct.
+    assert excluded.rank == 1
+    assert excluded.ranking_score == 2.0
+    assert excluded.ranking_source == "nemotron"
+    assert excluded.ranking_reason == "model ranking"
+
+    # No budget decision was made for this test.
+    assert excluded.remaining_budget_before_s is None
+    assert excluded.cumulative_cost_before_s is None
+    assert excluded.cumulative_cost_after_s is None

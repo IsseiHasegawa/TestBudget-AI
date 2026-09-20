@@ -34,10 +34,33 @@ class SkippedTest:
 
 
 @dataclass
+class SelectionEvidence:
+    """Facts recorded when the scheduler decides whether to run a test."""
+
+    nodeid: str
+    status: str
+    decision_code: str
+    decision_reason: str
+    rank: int | None
+    ranking_score: float | None
+    ranking_source: str
+    ranking_reason: str
+    estimated_duration_s: float | None
+    estimated_cost_s: float
+    remaining_budget_before_s: float | None
+    cumulative_cost_before_s: float | None
+    cumulative_cost_after_s: float | None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class ExecutionPlan:
     selected: list[str] = field(default_factory=list)
     skipped: list[SkippedTest] = field(default_factory=list)
     reasons: dict[str, str] = field(default_factory=dict)
+    decision_records: dict[str, SelectionEvidence] = field(default_factory=dict)
     budget_s: float = 0.0
     ai_elapsed_s: float = 0.0
     available_s: float = 0.0
@@ -52,6 +75,10 @@ class ExecutionPlan:
         return {
             "selected": self.selected,
             "skipped": [item.to_dict() for item in self.skipped],
+            "decision_records": {
+                nodeid: record.to_dict()
+                for nodeid, record in self.decision_records.items()
+            },
             "budget_s": self.budget_s,
             "ai_elapsed_s": self.ai_elapsed_s,
             "available_s": round(self.available_s, 3),
@@ -108,12 +135,63 @@ def build_plan(
     )
     plan.reasons = {item.nodeid: item.reason for item in ranked}
 
+    ranking_positions = {
+        item.nodeid: position
+        for position, item in enumerate(ranked, start=1)
+    }
+    ranking_items = {item.nodeid: item for item in ranked}
+
+    def record_decision(
+        nodeid: str,
+        status: str,
+        decision_code: str,
+        decision_reason: str,
+        cumulative_before: float,
+        cumulative_after: float,
+    ) -> None:
+        item = ranking_items.get(nodeid)
+        candidate = by_nodeid.get(nodeid)
+        estimated_duration = (
+            candidate.estimated_duration_s
+            if candidate is not None
+            else None
+        )
+
+        plan.decision_records[nodeid] = SelectionEvidence(
+            nodeid=nodeid,
+            status=status,
+            decision_code=decision_code,
+            decision_reason=decision_reason,
+            rank=ranking_positions.get(nodeid),
+            ranking_score=item.score if item is not None else None,
+            ranking_source=plan.ranking_source,
+            ranking_reason=item.reason if item is not None else "",
+            estimated_duration_s=estimated_duration,
+                 estimated_cost_s=round(
+                _estimate(candidate) * safety_factor, 3
+            ),
+            remaining_budget_before_s=round(
+                plan.available_s - cumulative_before, 3
+            ),
+            cumulative_cost_before_s=round(cumulative_before, 3),
+            cumulative_cost_after_s=round(cumulative_after, 3),
+        )
+
     if plan.available_s <= 0:
         plan.warnings.append(
             f"the ranking step consumed the whole budget "
             f"({ai_elapsed_s:.2f}s of {budget_s:.2f}s); no test was started"
         )
         plan.skipped = [SkippedTest(item.nodeid, "no budget left after ranking") for item in ranked]
+        for item in ranked:
+            record_decision(
+                item.nodeid,
+                "NOT_SELECTED",
+                "no_budget_after_ranking",
+                "No test budget remains after ranking.",
+                0.0,
+                0.0,
+            )
         return plan
 
     # Mandatory tests are reserved before anything competes for the budget.
@@ -126,13 +204,31 @@ def build_plan(
         cost = _estimate(by_nodeid.get(nodeid)) * safety_factor
 
         if nodeid in mandatory:
+            before = spent
             plan.selected.append(nodeid)
             spent += cost
+            record_decision(
+                nodeid,
+                "SELECTED",
+                "mandatory",
+                "Selected because this test was marked as mandatory.",
+                before,
+                spent,
+            )
             continue
 
         if spent + cost <= plan.available_s:
+            before = spent
             plan.selected.append(nodeid)
             spent += cost
+            record_decision(
+                nodeid,
+                "SELECTED",
+                "fits_budget",
+                "Selected because its estimated cost fits the remaining budget.",
+                before,
+                spent,
+            )
             continue
 
         plan.skipped.append(
@@ -140,6 +236,14 @@ def build_plan(
                 nodeid,
                 f"needs {cost:.2f}s but only {max(0.0, plan.available_s - spent):.2f}s remain",
             )
+        )
+        record_decision(
+            nodeid,
+            "NOT_SELECTED",
+            "insufficient_budget",
+            "Not selected because its estimated cost exceeds the remaining budget.",
+            spent,
+            spent,
         )
         rank_position = next(
             (index for index, item in enumerate(ranked) if item.nodeid == nodeid), position

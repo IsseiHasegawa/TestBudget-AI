@@ -89,6 +89,11 @@ def build_report(
             for result in outcome.results
         ],
         "not_executed": not_executed,
+        "selection_evidence": [
+            plan.decision_records[candidate.nodeid].to_dict()
+            for candidate in candidates
+            if candidate.nodeid in plan.decision_records
+        ],
         "warnings": plan.warnings,
         "coverage_caveat": (
             "A green selective run does not certify the full suite. "
@@ -135,7 +140,7 @@ def render_plan(plan: ExecutionPlan, candidates: list[TestCandidate], limit: int
 
     if plan.skipped:
         lines.append("")
-        lines.append(f"skipped for budget ({len(plan.skipped)}):")
+        lines.append(f"not selected ({len(plan.skipped)}):")
         for item in plan.skipped[:limit or len(plan.skipped)]:
             lines.append(f"  {item.nodeid}  [{item.reason}]")
         if limit > 0 and len(plan.skipped) > limit:
