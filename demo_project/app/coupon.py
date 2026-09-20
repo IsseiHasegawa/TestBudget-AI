@@ -42,7 +42,7 @@ def _round_percent(subtotal: int, percent: int) -> int:
     Truncating toward zero always favours the store by at most one cent. A PR
     that switches this to banker's rounding is the canonical demo change.
     """
-    return (subtotal * percent) // 100
+    return round(subtotal * percent / 100)
 
 
 def discount_for(coupon: Coupon, subtotal: int) -> int:
