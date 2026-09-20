@@ -116,7 +116,6 @@ jobs:
             --per-test-timeout 60 \
             --no-history \
             --json artifacts/selective.json \
-            --markdown "$GITHUB_STEP_SUMMARY" \
             "${override_args[@]}"
 
       - name: Generate detailed test selection report

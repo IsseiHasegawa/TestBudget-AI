@@ -60,17 +60,74 @@ def render_markdown(report: dict) -> str:
             "The number of selected records does not match the run summary."
         )
 
+    collected = totals["collected"]
+    selected_count = len(selected)
+    not_selected_count = len(not_selected)
+
+    selection_rate = (
+        selected_count / collected * 100 if collected else 0.0
+    )
+    filled = round(selection_rate / 100 * 12)
+    selection_bar = "█" * filled + "░" * (12 - filled)
+
+    manual_includes = [
+        r for r in selected
+        if r["decision_code"] == "manual_include"
+    ]
+    manual_excludes = [
+        r for r in not_selected
+        if r["decision_code"] == "manual_exclude"
+    ]
+
     lines = [
         "# Test Selection Report",
         "",
+        "> **TestBudget-AI** · Explainable test selection under a time budget",
+        "",
+        "## 📊 Run at a glance",
+        "",
+        "| 🧪 Selected | ⏱️ Actual test time | 📦 Estimated cost | ⏭️ Not selected |",
+        "| ---: | ---: | ---: | ---: |",
+        f"| **{selected_count}/{collected}** "
+        f"| **{seconds(budget['actual_run_s'])}** "
+        f"| **{seconds(budget['estimated_selected_s'])}** "
+        f"| **{not_selected_count}** |",
+        "",
+        f"**Selection rate:** `{selection_bar}` "
+        f"**{selection_rate:.0f}%**",
+        "",
         f"**Ranking source:** {safe(ranking['source'])}  ",
         f"**Time budget:** {seconds(budget['budget_s'])}  ",
-        f"**Selected:** {len(selected)}/{totals['collected']}  ",
+        f"**Selected:** {selected_count}/{collected}  ",
         f"**Estimated selected cost:** "
         f"{seconds(budget['estimated_selected_s'])}  ",
         f"**Actual test time:** {seconds(budget['actual_run_s'])}",
         "",
+        "> **Scope:** This is a selective run. "
+        "A green result does not certify the full test suite.",
+        "",
     ]
+
+    if manual_includes or manual_excludes:
+        lines.extend([
+            "## 🎛️ Developer overrides",
+            "",
+            f"**Manually included:** {len(manual_includes)}  ",
+            f"**Manually excluded:** {len(manual_excludes)}",
+            "",
+        ])
+
+        for record in manual_includes:
+            lines.append(
+                f"- **INCLUDE** · `{safe(record['nodeid'])}`"
+            )
+
+        for record in manual_excludes:
+            lines.append(
+                f"- **EXCLUDE** · `{safe(record['nodeid'])}`"
+            )
+
+        lines.append("")
 
     if report.get("demo_only") is True:
         lines.extend([
@@ -114,7 +171,14 @@ def render_markdown(report: dict) -> str:
         lines.extend(["No tests were selected.", ""])
 
     for record in selected:
+        is_manual = record["decision_code"] == "manual_include"
+        label = "🎛️ MANUAL INCLUDE" if is_manual else "✅ SELECTED"
+
         lines.extend([
+            "<details open>" if is_manual else "<details>",
+            f"<summary><strong>{label}</strong> · "
+            f"<code>{safe(record['nodeid'])}</code></summary>",
+            "",
             f"### `{safe(record['nodeid'])}`",
             "",
             f"- **Decision:** {safe(record['decision_reason'])}",
@@ -168,20 +232,65 @@ def render_markdown(report: dict) -> str:
                 "",
             ])
 
-    lines.extend([
-        "## Not selected",
-        "",
-        "| Test | Decision type | Reason | Estimated cost |",
-        "| --- | --- | --- | ---: |",
-    ])
+        lines.extend(["</details>", ""])
+
+    lines.extend(["## Not selected", ""])
+
+    groups = [
+        ("🎛️ Manually excluded", []),
+        ("⏱️ Budget-limited", []),
+        ("🔎 Relevance-filtered", []),
+        ("📋 Other decisions", []),
+    ]
 
     for record in not_selected:
-        lines.append(
-            f"| `{safe(record['nodeid'])}` "
-            f"| {safe(record['decision_code'])} "
-            f"| {safe(record['decision_reason'])} "
-            f"| {seconds(record['estimated_cost_s'])} |"
-        )
+        code = record["decision_code"]
+        reason = record["decision_reason"]
+
+        if code == "manual_exclude":
+            group_index = 0
+        elif code in {
+            "insufficient_budget",
+            "manual_include_insufficient_budget",
+            "no_budget_after_ranking",
+        }:
+            group_index = 1
+        elif "relevan" in code.lower() or (
+            "relevance policy" in reason.lower()
+        ):
+            group_index = 2
+        else:
+            group_index = 3
+
+        groups[group_index][1].append(record)
+
+    if not not_selected:
+        lines.extend(["All collected tests were selected.", ""])
+
+    for title, group_records in groups:
+        if not group_records:
+            continue
+
+        # Show manual exclusions immediately; fold away longer lists.
+        opening = "<details open>" if title.startswith("🎛️") else "<details>"
+        lines.extend([
+            opening,
+            f"<summary><strong>{title} "
+            f"({len(group_records)})</strong></summary>",
+            "",
+            "| Test | Decision type | Reason | Estimated cost |",
+            "| --- | --- | --- | ---: |",
+        ])
+
+        for record in group_records:
+            lines.append(
+                f"| `{safe(record['nodeid'])}` "
+                f"| {safe(record['decision_code'])} "
+                f"| {safe(record['decision_reason'])} "
+                f"| {seconds(record['estimated_cost_s'])} |"
+            )
+
+        lines.extend(["", "</details>", ""])
 
     lines.extend([
         "",

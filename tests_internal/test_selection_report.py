@@ -163,3 +163,85 @@ def test_markdown_labels_synthetic_demo_report():
 
     assert "**DEMO ONLY — NOT AN ACTUAL TEST RUN.**" in markdown
     assert "Synthetic selection plan. No tests were executed." in markdown
+
+
+def test_markdown_dashboard_shows_run_summary():
+    markdown = render_markdown(make_report())
+
+    assert "## 📊 Run at a glance" in markdown
+    assert "**2/3**" in markdown
+    assert "**4.00s**" in markdown
+    assert "**5.20s**" in markdown
+    assert "**Selection rate:**" in markdown
+    assert "**67%**" in markdown
+    assert "A green result does not certify the full test suite." in markdown
+
+
+def test_markdown_highlights_manual_overrides():
+    report = make_report()
+    records = {
+        record["nodeid"]: record
+        for record in report["selection_evidence"]
+    }
+
+    included = records["tests/test_coupon.py::test_first"]
+    included["decision_code"] = "manual_include"
+    included["decision_reason"] = "Developer manually included this test."
+
+    excluded = records["tests/test_profile.py::test_unrelated"]
+    excluded["decision_code"] = "manual_exclude"
+    excluded["decision_reason"] = "Developer manually excluded this test."
+
+    markdown = render_markdown(report)
+
+    assert "## 🎛️ Developer overrides" in markdown
+    assert "**Manually included:** 1" in markdown
+    assert "**Manually excluded:** 1" in markdown
+    assert (
+        "**INCLUDE** · `tests/test_coupon.py::test_first`"
+        in markdown
+    )
+    assert (
+        "**EXCLUDE** · `tests/test_profile.py::test_unrelated`"
+        in markdown
+    )
+    assert "<details open>" in markdown
+    assert "🎛️ MANUAL INCLUDE" in markdown
+    assert "🎛️ Manually excluded (1)" in markdown
+
+
+def test_markdown_groups_not_selected_tests_by_reason():
+    report = make_report()
+
+    budget_limited = make_record(
+        "tests/test_checkout.py::test_slow",
+        status="NOT_SELECTED",
+        decision_code="insufficient_budget",
+        decision_reason="Estimated cost exceeds the remaining budget.",
+        remaining_budget=1.0,
+        cumulative_cost=None,
+    )
+    manually_excluded = make_record(
+        "tests/test_cart.py::test_skipped",
+        status="NOT_SELECTED",
+        decision_code="manual_exclude",
+        decision_reason="Developer manually excluded this test.",
+        remaining_budget=None,
+        cumulative_cost=None,
+    )
+
+    report["selection_evidence"].extend([
+        budget_limited,
+        manually_excluded,
+    ])
+    report["totals"]["collected"] = 5
+
+    markdown = render_markdown(report)
+
+    assert "🎛️ Manually excluded (1)" in markdown
+    assert "⏱️ Budget-limited (1)" in markdown
+    assert "🔎 Relevance-filtered (1)" in markdown
+    assert markdown.count("<details") == markdown.count("</details>")
+    assert "`tests/test_cart.py::test_skipped`" in markdown
+    assert "`tests/test_checkout.py::test_slow`" in markdown
+    assert "`tests/test_profile.py::test_unrelated`" in markdown
