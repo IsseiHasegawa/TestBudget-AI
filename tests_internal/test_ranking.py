@@ -1,10 +1,12 @@
 """Tests for the non-AI ranking and the budget scheduler."""
 
+import argparse
 import pytest
 
 from src.change_analyzer import ChangedFile, ChangeSet
 from src.models import TestCandidate
 from src.prioritizer import FILE_RULE, KEYWORD, rank
+from main import _ranking_allowance
 from src.scheduler import ai_time_allowance, build_plan
 
 
@@ -183,3 +185,25 @@ def test_model_time_allowance_ignores_an_unusable_override(monkeypatch):
 
     monkeypatch.setenv("TESTBUDGET_AI_MAX_SECONDS", "")
     assert ai_time_allowance(600.0) == 10.0
+
+
+def test_explicit_ranking_budget_is_taken_literally():
+    """The share-of-budget formula must not cap an explicit request.
+
+    At a 90s budget the 15% share is 13.5s, so folding --ranking-budget 20
+    through the formula would silently hand back 13.5s: the same trap the flag
+    exists to escape.
+    """
+    args = argparse.Namespace(budget=90.0, ranking_budget=20.0)
+    assert _ranking_allowance(args) == 20.0
+
+    # Without the flag the formula still applies.
+    assert _ranking_allowance(argparse.Namespace(budget=90.0, ranking_budget=None)) == 10.0
+
+
+def test_explicit_ranking_budget_cannot_exceed_the_total():
+    args = argparse.Namespace(budget=8.0, ranking_budget=20.0)
+    assert _ranking_allowance(args) == 8.0
+
+    args = argparse.Namespace(budget=60.0, ranking_budget=-5.0)
+    assert _ranking_allowance(args) == 0.0

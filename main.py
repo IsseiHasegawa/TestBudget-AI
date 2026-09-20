@@ -94,6 +94,22 @@ def cmd_changes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ranking_allowance(args: argparse.Namespace) -> float:
+    """How long the model may take, in seconds.
+
+    `--ranking-budget` is taken literally rather than folded into the
+    share-of-budget formula, which would quietly cap it again: at a 90s budget
+    the 15% share is 13.5s, so asking for 20s and silently getting 13.5s would
+    be the same trap in a new place. It is still clamped to the total budget,
+    since spending longer ranking than the whole run is allowed would leave
+    nothing to rank for.
+    """
+    explicit = getattr(args, "ranking_budget", None)
+    if explicit is None:
+        return ai_time_allowance(args.budget)
+    return round(max(0.0, min(float(explicit), args.budget)), 3)
+
+
 def _rank(args, candidates, changes):
     """Produce an ordering plus the metadata the report needs.
 
@@ -105,7 +121,7 @@ def _rank(args, candidates, changes):
     if args.strategy != NEMOTRON:
         return rank(args.strategy, candidates, changes), args.strategy, None, 0.0, {}
 
-    allowance = ai_time_allowance(args.budget)
+    allowance = _ranking_allowance(args)
     started = time.perf_counter()
     try:
         result = rank_with_model(
@@ -262,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=KEYWORD,
         choices=sorted(STRATEGIES),
         help="ordering used when the model is unavailable or rejected",
+    )
+    ranking.add_argument(
+        "--ranking-budget",
+        type=float,
+        default=None,
+        help=(
+            "explicit ceiling on the model call, in seconds. Overrides the "
+            "share-of-budget formula, so raising it does not silently shrink "
+            "the time left for tests"
+        ),
     )
     ranking.add_argument("--must-run", action="append", help="repeatable; always runs first")
     ranking.add_argument("--must-run-file", default=None, help="file with one nodeid per line")

@@ -141,9 +141,9 @@ Judges reward this and the brief asks for it.
 - [x] Demo PR is open and both jobs have finished. Links in the section above.
 - [ ] If you re-run it live, rehearse until Nemotron actually answers. At the
       default cap that may take two or three tries.
-- [ ] Consider raising `TESTBUDGET_AI_MAX_SECONDS` (repository variable, or the
-      `ai_max_seconds` dispatch input). At a 60s budget, spending 20s on
-      ranking still leaves 40s of tests, and the demo stops being a coin flip.
-      Say the number out loud if you change it.
+- [x] The ranking deadline is no longer the binding constraint. Selective CI
+      runs at a 90s total budget with an explicit 20s ranking budget, so the
+      first attempt gets 12s against a measured p90 of 7.43s. Tests still get
+      at least 70s. Override per run with the `ranking_budget` dispatch input.
 - [ ] Have the terminal version ready as a fallback so you are never waiting on
       a CI queue. It needs `NVIDIA_API_KEY` in a local `.env`.
