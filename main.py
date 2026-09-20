@@ -21,7 +21,7 @@ from src.model_response import ResponseRejected
 from src.nemotron_client import is_configured, model_name, rank_with_model
 from src.prioritizer import NEMOTRON, STRATEGIES, KEYWORD, from_model_order, rank
 from src.reporter import build_report, render_console, render_markdown, render_plan, write_report
-from src.scheduler import ExecutionPlan, ai_time_allowance, build_plan
+from src.scheduler import ExecutionPlan, SkippedTest, ai_time_allowance, build_plan
 from src.test_collector import CollectionError, collect_tests, validate_nodeids
 from src.test_runner import run_tests
 
@@ -132,6 +132,28 @@ def _rank(args, candidates, changes):
 def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tuple[ExecutionPlan, ChangeSet]:
     changes = _changes(args)
     ranked, source, fallback_reason, ai_elapsed, info = _rank(args, candidates, changes)
+
+    excluded = []
+    relevant_found = True
+
+    if getattr(args, "selection_policy", "fill") == "relevant":
+        # Weak signals, such as "same package" alone, are insufficient.
+        # This is a general heuristic: no demo-specific test names.
+        keyword_scores = {
+            item.nodeid: item.score
+            for item in rank(KEYWORD, candidates, changes)
+        }
+        eligible = {
+            nodeid for nodeid, score in keyword_scores.items()
+            if score >= 1.0
+        }
+        eligible.update(_must_run(args))
+        relevant_found = bool(eligible)
+
+        if relevant_found:
+            excluded = [item for item in ranked if item.nodeid not in eligible]
+            ranked = [item for item in ranked if item.nodeid in eligible]
+
     plan = build_plan(
         ranked,
         candidates,
@@ -142,6 +164,25 @@ def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tupl
         fallback_reason=fallback_reason,
         model_info=info,
     )
+    if getattr(args, "selection_policy", "fill") == "relevant":
+        if relevant_found:
+            plan.skipped.extend(
+                SkippedTest(
+                    item.nodeid,
+                    "excluded by experimental relevance policy",
+                )
+                for item in excluded
+            )
+            plan.warnings.append(
+                "experimental relevance policy: only tests with a "
+                "keyword relevance score >= 1.0 were eligible"
+            )
+        else:
+            plan.warnings.append(
+                "experimental relevance policy found no strong matches; "
+                "used the original budget-filling behavior"
+            )
+
     return plan, changes
 
 
@@ -262,6 +303,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=KEYWORD,
         choices=sorted(STRATEGIES),
         help="ordering used when the model is unavailable or rejected",
+    )
+    ranking.add_argument(
+        "--selection-policy",
+        choices=("fill", "relevant"),
+        default="fill",
+        help="fill: existing budget-packing behavior; relevant: experimental relevance filter",
     )
     ranking.add_argument("--must-run", action="append", help="repeatable; always runs first")
     ranking.add_argument("--must-run-file", default=None, help="file with one nodeid per line")
