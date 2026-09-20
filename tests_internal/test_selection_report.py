@@ -109,3 +109,57 @@ def test_markdown_rejects_missing_or_incomplete_evidence():
 
     with pytest.raises(ValueError, match="does not match collected tests"):
         render_markdown(report)
+
+
+def test_markdown_displays_static_call_path_without_claiming_execution():
+    report = make_report()
+    report["selection_evidence"][2]["code_evidence"] = [{
+        "type": "static_call_path",
+        "changed_file": "demo_project/app/coupon.py",
+        "changed_function": "_round_percent",
+        "call_path": [
+            "tests.test_coupon.test_first",
+            "app.coupon.discount_for",
+            "app.coupon._round_percent",
+        ],
+        "execution_verified": False,
+        "source_snapshot": "working_tree",
+    }]
+
+    markdown = render_markdown(report)
+
+    assert "Static call path (execution not verified)" in markdown
+    assert (
+        "`tests.test_coupon.test_first` → "
+        "`app.coupon.discount_for` → "
+        "`app.coupon._round_percent`"
+    ) in markdown
+    assert "demo_project/app/coupon.py" in markdown
+    assert "working_tree" in markdown
+
+
+def test_markdown_displays_ai_explanation_separately():
+    report = make_report()
+    report["selection_evidence"][2]["ai_explanation"] = {
+        "type": "ai_inferred_relevance",
+        "source": "nemotron",
+        "explanation": "The rounding change may affect the checkout total.",
+        "execution_verified": False,
+    }
+
+    markdown = render_markdown(report)
+
+    assert "**AI-inferred relevance (not verified):**" in markdown
+    assert "The rounding change may affect the checkout total." in markdown
+    assert "**Static call path (execution not verified):**" not in markdown
+
+
+def test_markdown_labels_synthetic_demo_report():
+    report = make_report()
+    report["demo_only"] = True
+    report["demo_note"] = "Synthetic selection plan. No tests were executed."
+
+    markdown = render_markdown(report)
+
+    assert "**DEMO ONLY — NOT AN ACTUAL TEST RUN.**" in markdown
+    assert "Synthetic selection plan. No tests were executed." in markdown

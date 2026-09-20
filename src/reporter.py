@@ -14,6 +14,7 @@ from pathlib import Path
 
 from src import config
 from src.change_analyzer import ChangeSet
+from src.code_explanation import find_static_call_path
 from src.models import FAILING_OUTCOMES, RunOutcome, TestCandidate
 from src.scheduler import ExecutionPlan
 
@@ -29,12 +30,69 @@ _OUTCOME_GLYPH = {
 }
 
 
+
+def _static_code_evidence(nodeid: str, changes: ChangeSet | None, graph_cache: dict) -> list[dict]:
+    """Find static call paths, without claiming that they executed."""
+    if changes is None:
+        return []
+
+    test_file, separator, test_name = nodeid.partition("::")
+    if not separator or not test_name.isidentifier():
+        return []
+
+    test_path = (config.ROOT / test_file).resolve()
+    if not test_path.is_file():
+        return []
+
+    evidence = []
+
+    for changed in changes.files:
+        if not changed.is_python or changed.status == "d":
+            continue
+
+        changed_path = (config.ROOT / changed.path).resolve()
+        if not changed_path.is_file():
+            continue
+
+        source_root = next(
+            (parent for parent in test_path.parents
+             if changed_path.is_relative_to(parent)),
+            None,
+        )
+        if source_root is None:
+            continue
+
+        for symbol in changed.symbols:
+            if not symbol.isidentifier():
+                continue
+
+            call_path = find_static_call_path(
+                source_root=source_root,
+                test_nodeid=f"{test_path}::{test_name}",
+                changed_file=changed_path,
+                changed_function=symbol,
+                graph_cache=graph_cache,
+            )
+
+            if call_path is not None:
+                evidence.append({
+                    "type": "static_call_path",
+                    "changed_file": changed.path,
+                    "changed_function": symbol,
+                    "call_path": call_path,
+                    "execution_verified": False,
+                    "source_snapshot": "working_tree",
+                })
+
+    return evidence
+
 def build_report(
     outcome: RunOutcome,
     candidates: list[TestCandidate],
     plan: ExecutionPlan,
     changes: ChangeSet | None = None,
 ) -> dict:
+    graph_cache = {}
     rank_of = {nodeid: index + 1 for index, nodeid in enumerate(plan.selected)}
     executed = set(outcome.selected)
     skipped_reasons = {item.nodeid: item.reason for item in plan.skipped}
@@ -90,7 +148,12 @@ def build_report(
         ],
         "not_executed": not_executed,
         "selection_evidence": [
-            plan.decision_records[candidate.nodeid].to_dict()
+            {
+                **plan.decision_records[candidate.nodeid].to_dict(),
+                "code_evidence": _static_code_evidence(
+                    candidate.nodeid, changes, graph_cache
+                ),
+            }
             for candidate in candidates
             if candidate.nodeid in plan.decision_records
         ],

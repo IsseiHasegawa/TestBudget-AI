@@ -72,6 +72,17 @@ def render_markdown(report: dict) -> str:
         "",
     ]
 
+    if report.get("demo_only") is True:
+        lines.extend([
+            "**DEMO ONLY — NOT AN ACTUAL TEST RUN.**",
+            "",
+            safe(report.get("demo_note") or (
+                "This report uses synthetic data; no test execution "
+                "is demonstrated."
+            )),
+            "",
+        ])
+
     if ranking.get("fallback_reason"):
         lines.extend([
             f"**Ranking fallback:** "
@@ -123,6 +134,39 @@ def render_markdown(report: dict) -> str:
             f"{seconds(record['cumulative_cost_after_s'])}",
             "",
         ])
+
+        for evidence in record.get("code_evidence", []):
+            if evidence.get("type") != "static_call_path":
+                continue
+
+            lines.extend([
+                "**Static call path (execution not verified):**",
+                "",
+                "- " + " → ".join(
+                    f"`{safe(symbol)}`"
+                    for symbol in evidence["call_path"]
+                ),
+                "- **Changed function:** "
+                f"`{safe(evidence['changed_file'])}` / "
+                f"`{safe(evidence['changed_function'])}`",
+                "- **Source snapshot:** "
+                f"{safe(evidence['source_snapshot'])}",
+                "",
+            ])
+
+        ai = record.get("ai_explanation")
+        if (
+            isinstance(ai, dict)
+            and ai.get("type") == "ai_inferred_relevance"
+            and ai.get("source") == "nemotron"
+            and isinstance(ai.get("explanation"), str)
+        ):
+            lines.extend([
+                "**AI-inferred relevance (not verified):**",
+                "",
+                safe(ai["explanation"]),
+                "",
+            ])
 
     lines.extend([
         "## Not selected",
