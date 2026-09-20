@@ -24,6 +24,14 @@ on:
           Seconds the model may take before the scheduler gives up on it. Taken
           literally, so the rest of the budget stays with the tests.
         default: "20"
+      include:
+        description: "INCLUDE: pytest nodeid to prioritize (optional)"
+        type: string
+        default: ""
+      exclude:
+        description: "EXCLUDE: pytest nodeid to skip (optional)"
+        type: string
+        default: ""
 
 # Read only. Results go to the job summary, which needs no permission, rather
 # than to a pull request comment, which would need pull-requests: write.
@@ -89,7 +97,17 @@ jobs:
           NVIDIA_API_KEY: ${{ steps.plan.outputs.use_model == 'true' && secrets.NVIDIA_API_KEY || '' }}
           NEMOTRON_MODEL: ${{ vars.NEMOTRON_MODEL }}
           NEMOTRON_BASE_URL: ${{ vars.NEMOTRON_BASE_URL }}
+          MANUAL_INCLUDE: ${{ inputs.include || '' }}
+          MANUAL_EXCLUDE: ${{ inputs.exclude || '' }}
         run: |
+          override_args=()
+          if [[ -n "$MANUAL_INCLUDE" ]]; then
+            override_args+=(--include "$MANUAL_INCLUDE")
+          fi
+          if [[ -n "$MANUAL_EXCLUDE" ]]; then
+            override_args+=(--exclude "$MANUAL_EXCLUDE")
+          fi
+
           python main.py run \
             --base "${{ github.event.pull_request.base.sha || 'HEAD~1' }}" \
             --budget "${{ inputs.budget || '90' }}" \
@@ -98,7 +116,8 @@ jobs:
             --per-test-timeout 60 \
             --no-history \
             --json artifacts/selective.json \
-            --markdown "$GITHUB_STEP_SUMMARY"
+            --markdown "$GITHUB_STEP_SUMMARY" \
+            "${override_args[@]}"
 
       - name: Generate detailed test selection report
         if: always()
