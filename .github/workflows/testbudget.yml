@@ -19,6 +19,12 @@ on:
         default: nemotron
         type: choice
         options: [nemotron, keyword, file_rule, duration, history]
+      ai_max_seconds:
+        description: >-
+          Ceiling on ranking time. Blank uses the repository variable, then the
+          10s default. Raise it to trade test time for a better chance the
+          model answers at all.
+        default: ""
 
 # Read only. Results go to the job summary, which needs no permission, rather
 # than to a pull request comment, which would need pull-requests: write.
@@ -84,6 +90,7 @@ jobs:
           NVIDIA_API_KEY: ${{ steps.plan.outputs.use_model == 'true' && secrets.NVIDIA_API_KEY || '' }}
           NEMOTRON_MODEL: ${{ vars.NEMOTRON_MODEL }}
           NEMOTRON_BASE_URL: ${{ vars.NEMOTRON_BASE_URL }}
+          TESTBUDGET_AI_MAX_SECONDS: ${{ inputs.ai_max_seconds || vars.TESTBUDGET_AI_MAX_SECONDS }}
         run: |
           python main.py run \
             --base "${{ github.event.pull_request.base.sha || 'HEAD~1' }}" \

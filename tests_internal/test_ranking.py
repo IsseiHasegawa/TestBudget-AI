@@ -163,3 +163,23 @@ def test_model_time_allowance_scales_with_the_budget():
     # A large budget still stops at the cap rather than waiting on a long tail.
     assert ai_time_allowance(600.0) == 10.0
     assert ai_time_allowance(0.0) == 0.0
+
+
+def test_model_time_allowance_honours_the_environment(monkeypatch):
+    # Raising the cap is how a run buys a better chance the model answers.
+    monkeypatch.setenv("TESTBUDGET_AI_MAX_SECONDS", "25")
+    assert ai_time_allowance(600.0) == 25.0
+    # The fraction still binds below the cap.
+    assert ai_time_allowance(60.0) == 9.0
+
+    monkeypatch.setenv("TESTBUDGET_AI_BUDGET_FRACTION", "0.5")
+    assert ai_time_allowance(60.0) == 25.0
+
+
+def test_model_time_allowance_ignores_an_unusable_override(monkeypatch):
+    # A typo in a CI variable falls back to the default instead of raising.
+    monkeypatch.setenv("TESTBUDGET_AI_MAX_SECONDS", "twenty")
+    assert ai_time_allowance(600.0) == 10.0
+
+    monkeypatch.setenv("TESTBUDGET_AI_MAX_SECONDS", "")
+    assert ai_time_allowance(600.0) == 10.0

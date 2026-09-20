@@ -20,7 +20,7 @@ involved, which also produced the baselines the evaluation compares against.
 | P2 | Nemotron client, structured output, validation pipeline | Done |
 | P4 | GitHub Actions, secrets and permissions | Done |
 | P5 | Non-AI baselines, fourteen change scenarios, evaluation | Done |
-| P6 | Demo PR, results view, presentation | Not started |
+| P6 | Demo PR, results view, presentation | Done, see [DEMO.md](DEMO.md) |
 
 ## Setup
 
@@ -73,6 +73,7 @@ alongside the ones that were.
 ## Layout
 
 ```
+DEMO.md                 how to demo it, and the numbers to present honestly
 .github/workflows/
   testbudget.yml        selective CI on a pull request, advisory
   full-suite.yml        the merge gate: every test, no budget, no ranking

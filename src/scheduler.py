@@ -17,6 +17,12 @@ from src.prioritizer import UNKNOWN_DURATION_S, RankedTest
 # Share of the budget the model is allowed to consume before the scheduler
 # gives up on it. Measured latency has a long tail, so this is a ceiling rather
 # than an expectation.
+#
+# The defaults are tuned for fast feedback, and at a 60s budget they leave the
+# first attempt about 6s against a measured median near 6s. That is why roughly
+# half of CI calls fall back. Both are overridable from the environment so a
+# run that would rather buy the ranking than the speed can say so without a
+# code edit; see TESTBUDGET_AI_MAX_SECONDS in .env.example.
 AI_BUDGET_FRACTION = 0.15
 AI_MAX_SECONDS = 10.0
 
@@ -66,14 +72,20 @@ class ExecutionPlan:
 
 def ai_time_allowance(
     budget_s: float,
-    fraction: float = AI_BUDGET_FRACTION,
-    cap: float = AI_MAX_SECONDS,
+    fraction: float | None = None,
+    cap: float | None = None,
 ) -> float:
     """How long the model may take before the scheduler stops waiting.
 
     Tied to the budget rather than fixed, because waiting ten seconds inside a
-    five second budget is a contradiction.
+    five second budget is a contradiction. Resolved per call rather than at
+    import, so a .env file loaded later still takes effect.
     """
+    config.load_env_file()
+    if fraction is None:
+        fraction = config.env_float("TESTBUDGET_AI_BUDGET_FRACTION", AI_BUDGET_FRACTION)
+    if cap is None:
+        cap = config.env_float("TESTBUDGET_AI_MAX_SECONDS", AI_MAX_SECONDS)
     return round(max(0.0, min(cap, budget_s * fraction)), 3)
 
 
