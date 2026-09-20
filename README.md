@@ -20,7 +20,7 @@ involved, which also produced the baselines the evaluation compares against.
 | P2 | Nemotron client, structured output, validation pipeline | Done |
 | P4 | GitHub Actions, secrets and permissions | Done |
 | P5 | Non-AI baselines, fourteen change scenarios, evaluation | Done |
-| P6 | Demo PR, results view, presentation | Not started |
+| P6 | Demo PR, results view, presentation | Done, see [DEMO.md](DEMO.md) |
 
 ## Setup
 
@@ -54,6 +54,10 @@ so nothing extra is needed to run it.
 # Rank with Nemotron (needs NVIDIA_API_KEY in .env)
 ./.venv/bin/python main.py select --budget 60 --strategy nemotron
 
+# Give the model longer to answer without taking the time out of the tests.
+# --ranking-budget is literal, so this leaves at least 70s for test execution.
+./.venv/bin/python main.py run --budget 90 --ranking-budget 20 --strategy nemotron
+
 # Run an explicit set of nodeids and save the result as JSON
 ./.venv/bin/python main.py run \
   --nodeid 'demo_project/tests/test_coupon.py::test_percent_discount_truncates_partial_cent' \
@@ -73,6 +77,7 @@ alongside the ones that were.
 ## Layout
 
 ```
+DEMO.md                 how to demo it, and the numbers to present honestly
 .github/workflows/
   testbudget.yml        selective CI on a pull request, advisory
   full-suite.yml        the merge gate: every test, no budget, no ranking
@@ -226,6 +231,22 @@ reach the rule does not have.
 pass, recall stayed between 62 and 69 percent and the answer rate between 46
 and 52 percent, which is stable enough that the split above is not one lucky
 draw.
+
+Those calls were cut off by the allowance, not refused by the API: a rejected
+key raises `AUTH_FAILED`, and what the logs show is `TimeoutError`. The
+allowance was the binding constraint. At a 60s budget it is 9s, and the first
+attempt gets 60% of that, so 5.4s against successful calls whose latency has a
+p90 of 7.43s. Answers that would have arrived were being discarded.
+
+Selective CI therefore now asks for a **90s total budget with an explicit 20s
+ranking budget**, which puts the first attempt at 12s, above the slowest
+successful call observed (8.54s), and still leaves at least 70s for tests. The
+`--ranking-budget` flag is taken literally rather than folded back through the
+15% share, which at a 90s budget would have silently re-capped it to 13.5s.
+
+**Every number in this section predates that change.** They describe the 9s
+allowance and are left as measured; the new setting has to be re-measured
+before any better rate is claimed.
 
 The model samples at temperature 1, the setting NVIDIA documents for this
 model, so it returns a different order each time. Single-fault scenarios swing
