@@ -132,9 +132,31 @@ def build_plan(
     ranking_source: str = "keyword",
     fallback_reason: str | None = None,
     model_info: dict | None = None,
+    manual_overrides: dict[str, str] | None = None,
 ) -> ExecutionPlan:
     by_nodeid = {candidate.nodeid: candidate for candidate in candidates}
     must_run = [nodeid for nodeid in (must_run or []) if nodeid in by_nodeid]
+
+    overrides = dict(manual_overrides or {})
+    unknown = set(overrides) - set(by_nodeid)
+    if unknown:
+        raise ValueError(f"Unknown test in manual overrides: {sorted(unknown)}")
+
+    invalid = {
+        nodeid: mode for nodeid, mode in overrides.items()
+        if mode not in {"INCLUDE", "AUTO", "EXCLUDE"}
+    }
+    if invalid:
+        raise ValueError(f"Invalid manual override: {invalid}")
+
+    conflicts = set(must_run) & {
+        nodeid for nodeid, mode in overrides.items()
+        if mode == "EXCLUDE"
+    }
+    if conflicts:
+        raise ValueError(
+            f"Cannot exclude mandatory test(s): {sorted(conflicts)}"
+        )
 
     plan = ExecutionPlan(
         budget_s=budget_s,
@@ -194,26 +216,100 @@ def build_plan(
             f"the ranking step consumed the whole budget "
             f"({ai_elapsed_s:.2f}s of {budget_s:.2f}s); no test was started"
         )
-        plan.skipped = [SkippedTest(item.nodeid, "no budget left after ranking") for item in ranked]
-        for item in ranked:
+        # Preserve manual decisions even when no time remains for tests.
+        nodeids = dict.fromkeys([
+            *(item.nodeid for item in ranked),
+            *overrides,
+        ])
+        for nodeid in nodeids:
+            mode = overrides.get(nodeid, "AUTO")
+
+            if mode == "EXCLUDE":
+                code = "manual_exclude"
+                reason = "Not selected because the developer manually excluded this test."
+                skip_reason = "excluded by manual override"
+            elif mode == "INCLUDE":
+                code = "manual_include_insufficient_budget"
+                reason = "Manually included test could not fit within the time budget."
+                skip_reason = "manual INCLUDE requested, but no test budget remains"
+            else:
+                code = "no_budget_after_ranking"
+                reason = "No test budget remains after ranking."
+                skip_reason = "no budget left after ranking"
+
+            plan.skipped.append(SkippedTest(nodeid, skip_reason))
             record_decision(
-                item.nodeid,
-                "NOT_SELECTED",
-                "no_budget_after_ranking",
-                "No test budget remains after ranking.",
-                0.0,
-                0.0,
+                nodeid, "NOT_SELECTED", code, reason, 0.0, 0.0
             )
         return plan
 
-    # Mandatory tests are reserved before anything competes for the budget.
-    ordered = [nodeid for nodeid in must_run]
-    ordered.extend(item.nodeid for item in ranked if item.nodeid not in set(must_run))
+    # Mandatory tests first, then manual INCLUDE, then normal ranking.
+    # Manual EXCLUDE tests are recorded but never selected.
+    manual_include = {
+        nodeid for nodeid, mode in overrides.items()
+        if mode == "INCLUDE"
+    }
+    manual_exclude = {
+        nodeid for nodeid, mode in overrides.items()
+        if mode == "EXCLUDE"
+    }
+
+    ordered = list(dict.fromkeys([
+        *must_run,
+        *(nodeid for nodeid in by_nodeid if nodeid in manual_include),
+        *(item.nodeid for item in ranked if item.nodeid not in manual_exclude),
+        *(nodeid for nodeid in by_nodeid if nodeid in manual_exclude),
+    ]))
 
     mandatory = set(must_run)
     spent = 0.0
     for position, nodeid in enumerate(ordered):
         cost = _estimate(by_nodeid.get(nodeid)) * safety_factor
+
+        if nodeid in manual_exclude:
+            plan.skipped.append(
+                SkippedTest(nodeid, "excluded by manual override")
+            )
+            record_decision(
+                nodeid,
+                "NOT_SELECTED",
+                "manual_exclude",
+                "Not selected because the developer manually excluded this test.",
+                spent,
+                spent,
+            )
+            continue
+
+        if nodeid in manual_include and nodeid not in mandatory:
+            if spent + cost <= plan.available_s:
+                before = spent
+                plan.selected.append(nodeid)
+                spent += cost
+                record_decision(
+                    nodeid,
+                    "SELECTED",
+                    "manual_include",
+                    "Selected with priority because the developer manually included this test.",
+                    before,
+                    spent,
+                )
+            else:
+                plan.skipped.append(
+                    SkippedTest(
+                        nodeid,
+                        "manual INCLUDE requested, but the estimated cost "
+                        "exceeds the remaining budget",
+                    )
+                )
+                record_decision(
+                    nodeid,
+                    "NOT_SELECTED",
+                    "manual_include_insufficient_budget",
+                    "Manually included test could not fit within the time budget.",
+                    spent,
+                    spent,
+                )
+            continue
 
         if nodeid in mandatory:
             before = spent

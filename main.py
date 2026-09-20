@@ -44,6 +44,22 @@ def _must_run(args: argparse.Namespace) -> list[str]:
     return values
 
 
+def _manual_overrides(args: argparse.Namespace) -> dict[str, str]:
+    includes = set(getattr(args, "include", None) or [])
+    excludes = set(getattr(args, "exclude", None) or [])
+
+    conflicts = includes & excludes
+    if conflicts:
+        raise ValueError(
+            f"Cannot both include and exclude the same test: {sorted(conflicts)}"
+        )
+
+    return {
+        **{nodeid: "INCLUDE" for nodeid in includes},
+        **{nodeid: "EXCLUDE" for nodeid in excludes},
+    }
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
     candidates = collect_tests(target=args.target, history=_history(args))
     if not candidates:
@@ -146,6 +162,7 @@ def _rank(args, candidates, changes):
 
 
 def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tuple[ExecutionPlan, ChangeSet]:
+    overrides = _manual_overrides(args)
     changes = _changes(args)
     ranked, source, fallback_reason, ai_elapsed, info = _rank(args, candidates, changes)
 
@@ -169,7 +186,16 @@ def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tupl
             if score >= 1.0
         }
         eligible.update(_must_run(args))
+        eligible.update(
+            nodeid for nodeid, mode in overrides.items()
+            if mode == "INCLUDE"
+        )
         relevant_found = bool(eligible)
+        if relevant_found:
+            eligible.update(
+                nodeid for nodeid, mode in overrides.items()
+                if mode == "EXCLUDE"
+            )
 
         if relevant_found:
             excluded = [item for item in ranked if item.nodeid not in eligible]
@@ -184,6 +210,7 @@ def _plan_for(args: argparse.Namespace, candidates: list[TestCandidate]) -> tupl
         ranking_source=source,
         fallback_reason=fallback_reason,
         model_info=info,
+        manual_overrides=overrides,
     )
     if getattr(args, "selection_policy", "fill") == "relevant":
         if relevant_found:
@@ -258,6 +285,16 @@ def cmd_select(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if (args.include or args.exclude) and (
+        args.all or args.nodeid or args.from_file
+    ):
+        print(
+            "--include/--exclude cannot be combined with "
+            "--all, --nodeid, or --from-file",
+            file=sys.stderr,
+        )
+        return 2
+
     history = _history(args)
     candidates = collect_tests(target=args.target, history=history)
     if not candidates:
@@ -374,6 +411,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
  
+    ranking.add_argument(
+        "--include",
+        action="append",
+        default=None,
+        metavar="NODEID",
+        help="repeatable; prioritize this test within the time budget",
+    )
+    ranking.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="NODEID",
+        help="repeatable; do not select this test",
+    )
+
     ranking.add_argument("--must-run", action="append", help="repeatable; always runs first")
     ranking.add_argument("--must-run-file", default=None, help="file with one nodeid per line")
 
@@ -419,6 +471,9 @@ def main(argv: list[str] | None = None) -> int:
     except ChangeAnalysisError as exc:
         print(f"change analysis failed: {exc}", file=sys.stderr)
         return 4
+    except ValueError as exc:
+        print(f"invalid selection: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
