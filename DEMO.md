@@ -32,7 +32,39 @@ exact change:
 - `file_rule` finds **1 of 2** faults
 - `nemotron` finds **2 of 2**
 
-## Running it
+## The recorded run, PR #1
+
+[Pull request #1](https://github.com/IsseiHasegawa/TestBudget-AI/pull/1) is
+this exact change, and both jobs have already run on it. Use these links if you
+would rather not depend on a live call.
+
+| | Full suite | TestBudget (selective) |
+|---|---|---|
+| Run | [35480573088](https://github.com/IsseiHasegawa/TestBudget-AI/actions/runs/35480573088) | [35480573083](https://github.com/IsseiHasegawa/TestBudget-AI/actions/runs/35480573083) |
+| Tests | 82 | 14 of 30 |
+| Time | 142.2s | 46.8s |
+| Faults found | 2 | **2** |
+
+Same two faults, a third of the time. The full suite is the ground truth here,
+so this is measured recall on this change, not an estimate.
+
+Nemotron answered in 4.35s on the first attempt and put both failing tests at
+ranks 3 and 4, with these reasons:
+
+> `test_percent_discount_truncates_partial_cent`
+> — *"Directly tests truncation behavior of `_round_percent` with 999"*
+
+> `test_checkout.py::test_percent_coupon_changes_total`
+> — *"Exercises coupon total calculation through checkout"*
+
+The second reason is the one to read aloud. `checkout.py` is not in the diff.
+The model worked out that checkout consumes the discounted total and pulled in
+a test from a file a filename rule would never have opened.
+
+Both jobs are red, which is correct: the change really is a regression. The
+selective job going red is what fast feedback looks like.
+
+## Running it live
 
 Two forms. The terminal version is the reliable one; CI is the credible one.
 
@@ -98,7 +130,7 @@ Judges reward this and the brief asks for it.
 
 | Beat | Time | On screen |
 |---|---|---|
-| The problem: 139s suite, a four-character change | 30s | The diff |
+| The problem: a 139s suite, a four-character change | 30s | The diff |
 | Naive filename rule finds 1 of 2 | 60s | `--strategy file_rule` |
 | Nemotron finds 2 of 2, and says why | 90s | `--strategy nemotron`, the `selected because:` line |
 | Does it actually help? | 60s | The split table above |
@@ -106,8 +138,8 @@ Judges reward this and the brief asks for it.
 
 ## Before you present
 
-- [ ] Open the demo PR early so CI has finished and you have a permanent link.
-- [ ] Rehearse until you have a run where Nemotron actually answered. At the
+- [x] Demo PR is open and both jobs have finished. Links in the section above.
+- [ ] If you re-run it live, rehearse until Nemotron actually answers. At the
       default cap that may take two or three tries.
 - [ ] Consider raising `TESTBUDGET_AI_MAX_SECONDS` (repository variable, or the
       `ai_max_seconds` dispatch input). At a 60s budget, spending 20s on
