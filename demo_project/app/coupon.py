@@ -39,10 +39,10 @@ class Coupon:
 def _round_percent(subtotal: int, percent: int) -> int:
     """Convert a percentage of `subtotal` into whole cents.
 
-    Truncating toward zero always favours the store by at most one cent. A PR
-    that switches this to banker's rounding is the canonical demo change.
+    Rounding to nearest is fairer to the customer than truncating, which
+    always favoured the store by up to one cent.
     """
-    return (subtotal * percent) // 100
+    return round(subtotal * percent / 100)
 
 
 def discount_for(coupon: Coupon, subtotal: int) -> int:
